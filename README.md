@@ -1,13 +1,13 @@
 ## PR JCAI
 ### Yang Sudah:
-- M1S3
-- M1S4
-- M1S5
-- M1S6List
+- M1S3 (Module1 Session 3)
+- M1S4 (Module1 Session 4)
+- M1S5 (Module1 Session 5)
+- M1S6List (Module1 Session 6 List)
 
 ### Yang Belum:
-- M1S6Dict
-- M1S6Set
+- M1S6Dict (Module1 Session 6 Dict)
+- M1S6Set (Module1 Session6 Set)
 
 ### Yang buat coba-coba:
 Trial.py
