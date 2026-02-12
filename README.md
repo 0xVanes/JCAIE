@@ -11,6 +11,8 @@
 - M1S6Set (Module1 Session6 Set)
 
 ### Yang Belum:
+- M1S7
+- MySQL
 
 ### Yang buat coba-coba:
 Trial.py
