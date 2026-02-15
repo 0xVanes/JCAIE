@@ -13,8 +13,10 @@
 13/2/26
 - M1S7 (Module1 Session 7 Function)
 
+15/2/26
+- SQLExercise
+
 ### Yang Belum:
-- MySQL
 
 ### Yang buat coba-coba:
 Trial.ipynb
