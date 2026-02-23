@@ -17,6 +17,7 @@
 - SQLExercise
 
 ### Yang Belum:
+- DataAnalysisExercise
 
 ### Yang buat coba-coba:
 Trial.ipynb
