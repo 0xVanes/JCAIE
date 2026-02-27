@@ -8,11 +8,16 @@
 
 10/2/26
 - M1S6Dict (Module1 Session 6 Dict)
-- M1S6Set (Module1 Session6 Set)
+- M1S6Set (Module1 Session 6 Set)
+
+13/2/26
+- M1S7 (Module1 Session 7 Function)
+
+15/2/26
+- SQLExercise
 
 ### Yang Belum:
-- M1S7
-- MySQL
+- DataAnalysisExercise
 
 ### Yang buat coba-coba:
-Trial.py
+Trial.ipynb
