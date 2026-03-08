@@ -26,17 +26,19 @@ connection = mysql.connector.connect(
 cursor = connection.cursor()
 
 def read_table(connection):
-    #Execute query
-    cursor.execute("SELECT * FROM carrent2026")
-    #Fetch data
-    datarows = cursor.fetchall()
+    cursor.execute("SELECT * FROM carrent2026") #Execute query
+    datarows = cursor.fetchall() #Fetch data
     datacolumns = [col[0] for col in cursor.description]
     return pd.DataFrame(datarows, columns=datacolumns)
 
-#Function untuk tunjukkin Data
+def execute_query(query, params=None):
+    cursor.execute(query, params)
+    connection.commit()
+
+#Function untuk tunjukkin Data & REFRESH
 df = read_table(connection)
 
-####### SEMUA FUNCTION DISINI #############
+####### SEMUA FUNCTION UTAMA DISINI #############
 def menuUtama ():
     return print(f'''1. Lihat Semua Mobil
 2. Lihat Mobil Yang Tersedia
@@ -61,48 +63,45 @@ class Manager:
 
 defaultManager = Manager('mrManager',12345) #Bisa diganti ke list biar bisa gampang utak atik atau dict supaya lebih cepat
 
-##### BACKEND FUNCTION START DISINI ######
-#WELCOME TO CAR RENTAL
-while True:
+def get_vehicleModel(model):
+    car = df[df['vehicle_model'] == model]
+    if car.empty:
+        print("Mobil tidak ditemukan!")
+        return None
+    return car
+
+def input_vehicle():
+    model = input("Model Mobil: ").capitalize()
+    return model, get_vehicleModel(model)
+
+def update_sewaMobil(column, value, model):
+    query = f"UPDATE carrent2026 SET {column} = (%s) WHERE vehicle_model = (%s)"
+    execute_query(query, (value, model))
+
+def lihat_semuaMobil():
+    print("Berikut adalah Mobil-Mobil Yang Ada Di Rental Mobil")
+    display(df)
+
+def sewa_mobil():
+    global df
     df = read_table(connection) #REFRESH!
-
-    print(f'''SELAMAT DATANG DI RENTAL MOBIL''')
-    menuUtama()
-    pilihan = int(input("SILAHKAN PILIH SALAH SATU MENU DIATAS: ")) #Error kalau bukan int
-    if pilihan == 1:
-        print("Berikut adalah Mobil-Mobil Yang Ada Di Rental Mobil")
-        display(df)
-    
-    elif pilihan == 2:
-        df = read_table(connection) #REFRESH!
-        print("Berikut adalah mobil yang tersedia: ")
-        display(df[df['status'] == 'Available'])
-        print(df['status'].unique())
+    print("Berikut adalah mobil yang tersedia: ")
+    display(df[df['status'] == 'Available'])
         
-        while True:
-            pilihMobil = input("Model Mobil Manakah yang ingin anda sewa? ").capitalize()
-            mobilYgdipilih = df[df['vehicle_model'] == pilihMobil]
+    while True:
+        pilihMobil, mobilYgdipilih = input_vehicle()
 
-            if mobilYgdipilih.empty: #Error kalau ga diliat dulu mobilnya ada atau tidak
-                print("Mobil tidak ditemukan!")
+        if mobilYgdipilih is None: #Error kalau ga diliat dulu mobilnya ada atau tidak
+            continue
             
-            if mobilYgdipilih.iloc[0]['status'] == 'Available':
-                jawaban = input(f"Apakah anda akan memilih mobil {pilihMobil}? (ya/tidak)").lower()
-                if jawaban == 'ya':
-                    break
-                elif jawaban == 'tidak':
-                    print("Terima Kasih Sudah Mengunjungi Rental Mobil. Silahkan datang Kembali!")
-                    sys.exit()
-                else:
-                    print("Tidak ada Menu tersebut.")
-                    continue
-                
-            else:
-                jawaban = input("Mobil Tersebut tidak tersedia. Apakah anda ingin kembali ke halaman Utama? (ya/tidak)").lower() 
-                if jawaban == 'ya':
-                    break
-                else:
-                    sys.exit()
+        if mobilYgdipilih.iloc[0]['status'] != 'Available':
+            print("Mobil tersebut tidak tersedia!")
+            return
+        
+        jawaban = input(f"Apakah anda akan memilih mobil {pilihMobil}? (ya/tidak)").lower()
+        if jawaban == 'tidak':
+            print("Terima Kasih Sudah Mengunjungi Rental Mobil. Silahkan datang Kembali!")
+            return
 
         #Lama Peminjaman
         lamaPeminjaman = int(input(f"Berapa lama anda akan menyewa mobil {pilihMobil}? "))
@@ -114,244 +113,236 @@ Lama Peminjaman = {lamaPeminjaman}
 Total Pembayaran = Rp. {total_Pembayaran}
 ''')
         payment = int(input("Silahkan lakukan pembayaran: Rp. "))
+        while payment < total_Pembayaran:
+            kurang_bayar = total_Pembayaran - payment
+            print(f"Pembayaran anda kurang, Rp. {kurang_bayar}")
+            payment += int(input("Lakukan pembayaran sisanya: Rp. "))
+
         if payment > total_Pembayaran:
             print(f"Kembalian anda adalah = Rp. {payment-total_Pembayaran}")
-            print("Terima Kasih Telah Menyewa Mobil dari Jasa Kami!")
 
-            changeAvailability = "UPDATE carrent2026 SET status = (%s) WHERE vehicle_model = (%s)"
-            cursor.execute(changeAvailability, ('In Use', pilihMobil))
-            connection.commit()
+        print("Terima Kasih Telah Menyewa Mobil dari Jasa Kami!")
 
-            df = read_table(connection)
+        # Update status
+        update_sewaMobil("status", "In Use", pilihMobil)
 
-            #Ubah trips_taken sesuai LamaPeminjaman
-            theCarModel = df[df['vehicle_model'] == pilihMobil]
-            if theCarModel.empty:
-                print("Mobil tidak ditemukan!")
-                break
-            else:
-                changetripstaken = int(theCarModel.iloc[0]['trips_taken'] + lamaPeminjaman)
-                addNoOfTrips = "UPDATE carrent2026 SET trips_taken = (%s) WHERE vehicle_model = (%s)"
-                cursor.execute(addNoOfTrips, (changetripstaken, pilihMobil))
-                connection.commit()
-                    
-            break
+        # Update trips_taken
+        df = read_table(connection)
+        theCarModel = df[df['vehicle_model'] == pilihMobil]
 
-        elif payment < total_Pembayaran:
-            kurang_bayar = total_Pembayaran-payment
-            while kurang_bayar > 0:
-                print(f"Pembayaran anda kurang, Rp. {kurang_bayar}")
-                bayar_lanjutan = int(input("Lakukan pembayaran sisanya: Rp. "))
-    
-                kurang_bayar -= bayar_lanjutan
+        changetripstaken = int(theCarModel.iloc[0]['trips_taken'] + lamaPeminjaman)
+        update_sewaMobil("trips_taken", changetripstaken, pilihMobil)
+        break
 
-            if kurang_bayar < 0:
-                print(f"Kembalian anda adalah = Rp. {kurang_bayar}")
-                changeAvailability = "UPDATE carrent2026 SET status = (%s) WHERE vehicle_model = (%s)"
-                cursor.execute(changeAvailability, ('In Use', pilihMobil))
-                connection.commit()
-
-                df = read_table(connection)
-
-            print("Terima Kasih Telah Menyewa Mobil dari Jasa Kami!")
-            break
+def login_manager():
+    while True:
+        namaManager = str(input("Selamat datang manager, silahkan masukan username anda: "))
+        passwordManager = int(input(f"Silahkan input password {namaManager}: ")) #Error kalau bukan int
+        if namaManager == defaultManager.name and passwordManager == defaultManager.password:
+            print("Selamat datang Manager!")
+            return True
 
         else:
-            print("Terima Kasih Telah Menyewa Mobil dari Jasa Kami!")
-            changeAvailability = "UPDATE carrent2026 SET status = (%s) WHERE vehicle_model = (%s)"
-            cursor.execute(changeAvailability, ('In Use', pilihMobil))
+            print("Username/Password salah. Silahkan coba lagi.")
+
+def visualisasi_statistik():
+    vehiclebrandcount = df['vehicle_brand'].value_counts()
+    df['revenue_per_car'] = df['cost_per_day_in_RP'] * df['trips_taken']
+    revenue_byCar = df.groupby('vehicle_model')['revenue_per_car'].sum()
+    sorted_revenue_byCar = revenue_byCar.sort_values(ascending=False)
+    df['distance_per_trip'] = df['distance_travelled_in_km'] / df['trips_taken'].replace(0,1) #supaya ga error kalau dibagi 0
+    meanPriceBrand = df.groupby('vehicle_brand')['cost_per_day_in_RP'].mean()
+    sorted_meanPriceBrand = meanPriceBrand.sort_values(ascending=False)
+    distance_byCar = df.groupby('vehicle_model')['distance_travelled_in_km'].sum()
+    sorted_distance_byCar = distance_byCar.sort_values(ascending=False)
+    trips = df.groupby("vehicle_model")['trips_taken'].sum()
+    sorted_trips = trips.sort_values(ascending=False)
+    df['popularity_score'] = df['trips_taken'] * df['rating']
+    popularity = df.sort_values('popularity_score', ascending=False)
+
+    fig, axs = plt.subplots(2,4, figsize=(15,12))
+
+    #piechart vehicle_brand (descriptive)
+    vehiclebrandcount.plot.pie(ax=axs[0,0])
+    axs[0,0].set_title("Descriptive Brand Mobil")
+    axs[0,0].set_ylabel("")
+
+    #bar plot rent sales (revenue per car & per brand)
+    axs[0,1].bar(sorted_revenue_byCar.index, sorted_revenue_byCar.values)
+    axs[0,1].set_title("Revenue per Car")
+    axs[0,1].set_xlabel("Vehicle Model")
+    axs[0,1].set_ylabel("Revenue (Rp)")
+    axs[0,1].tick_params(axis='x', rotation=45)
+
+    #bar plot mean rental price per brand (pricing analysis)
+    axs[0,2].bar(sorted_meanPriceBrand.index, sorted_meanPriceBrand.values)
+    axs[0,2].set_title("Average Rental Price Per Car Brand")
+    axs[0,2].set_xlabel("Vehicle Brand")
+    axs[0,2].set_ylabel("Average Price Per Day (Rp)")
+    axs[0,2].tick_params(axis='x', rotation=45)
+
+    #bar plot distance travelled (usage analysis)
+    axs[0,3].bar(sorted_distance_byCar.index, sorted_distance_byCar.values)
+    axs[0,3].set_title("Usage Analysis: Distance Travelled")
+    axs[0,3].set_xlabel("Vehicle Model")
+    axs[0,3].set_ylabel("Distance (KM)")
+    axs[0,3].tick_params(axis='x', rotation=45)
+
+    #no. of trips per car (most rented vehicle)
+    axs[1,0].bar(sorted_trips.index, sorted_trips.values)
+    axs[1,0].set_title("Most Rented Vehicle")
+    axs[1,0].set_xlabel("Vehicle Model")
+    axs[1,0].set_ylabel("Trips Taken")
+    axs[1,0].tick_params(axis='x', rotation=45)
+
+    #scatter distance per trip (user behaviour)
+    axs[1,1].scatter(df['trips_taken'], df['distance_per_trip'])
+    axs[1,1].set_title("User Beahviour: Distance Per Trip")
+    axs[1,1].set_xlabel('Trips Taken')
+    axs[1,1].set_ylabel("Average Distance per Trip (KM)")
+    
+    #revenue per trip (expensive/cheap car often rented)
+    axs[1,2].scatter(df['trips_taken'], df['cost_per_day_in_RP'])
+    axs[1,2].set_title('Revenue per Trip')
+    axs[1,2].set_xlabel("Trips Taken")
+    axs[1,2].set_ylabel("Cost Per Day (Rp.)")
+    axs[1,3].tick_params(axis='x', rotation=45)
+    
+    #histogram most favourite car according to trips and rating (preferance)
+    axs[1,3].bar(popularity['vehicle_model'], popularity['popularity_score'])
+    axs[1,3].set_title('Most Favourite Cars')
+    axs[1,3].set_xlabel('Vehicle Model')
+    axs[1,3].set_ylabel('Popularity Score')
+    axs[1,3].tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+    plt.show()
+    
+def menu_manager():
+    global df, logout
+    logout = False
+    while True:
+        menuUtamaManager()
+        pilihanManager = int(input("SILAHKAN PILIH SALAH SATU PILIHAN DIATAS: "))
+        #Tambah Mobil Baru
+        if pilihanManager == 1:
+            print("Input Mobil Baru:")
+            vehicleNumber = int(df['vehicle_no'].max() + 1)
+            vehicleBrand = str(input("Nama Brand Mobil: ")).title()
+            vehicleModel = str(input("Nama Model Mobil: ")).capitalize()
+            vehicleType = str(input("Tipe Mobil: ")).upper()
+            vehicleYear = int(input("Mobil Keluaran tahun berapa? "))
+            fuelType = str(input("Bahan bakar yang digunakan: ")).capitalize()
+                
+            tanggalMaintenance = input("Tanggal Maintenance (YYYY-MM-DD): ")
+            lastMaintenanceDate = datetime.strptime(tanggalMaintenance, "%Y-%m-%d").date()
+                
+            distancetravelled = int(input("Jarak tempuh yang sudah di lewati (KM): "))
+            hargaSewa = int(input("Harga untuk disewakan: Rp. "))
+            sudahDisewakan = 0
+            yangSudahReview = 0
+            ratingnya = 0
+            status = 'Available'
+
+            add_query = "INSERT INTO carrent2026 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            cursor.execute(add_query, (vehicleNumber, vehicleBrand, vehicleModel, vehicleType, vehicleYear, fuelType, lastMaintenanceDate, distancetravelled, hargaSewa, sudahDisewakan, yangSudahReview, ratingnya, status))
             connection.commit()
 
-            df = read_table(connection)
+            df = read_table(connection) #REFRESH!
+            display(df)
+            break
+        
+        elif pilihanManager == 2:
+            #Kembalikan Mobil (ubah in use jadi available)
+            display(df[df['status'] == 'In Use'])
+            changestatus = input("Mobil yang Sudah dikembalikan (Menurut vehicle_model): ")
+            update_sewaMobil("status", "Available", changestatus)
+            
+            #UPDATE distance travelled
+            changedistance = int(input("Berapa KM di Odometer sekarang? "))
+            update_sewaMobil("distance_travelled_in_km", changedistance, changestatus)
+            
+            df = read_table(connection) #REFRESH!
+            display(df)
             break
 
-    elif pilihan == 3:
-        while True:
-            namaManager = str(input("Selamat datang manager, silahkan masukan username anda: "))
-            passwordManager = int(input(f"Silahkan input password {namaManager}: ")) #Error kalau bukan int
-            if namaManager == defaultManager.name and passwordManager == defaultManager.password:
-                print("Selamat datang Manager!")
+        #Hapus Mobil (urutan vehicle_no tidak berubah)
+        elif pilihanManager == 3:
+            display(df[df['status'] == 'Available'])
+            hapusMobil = int(input("Mobil yang ingin dihapus (Menurut vehicle_no): "))
+                
+            delete_query = "DELETE FROM carrent2026 WHERE vehicle_no = (%s)"
+            execute_query(delete_query, (hapusMobil,))
+            
+            df = read_table(connection) #REFRESH!
+            display(df)
+            break
+
+        #Statistiks (descriptive, mean, avg) dan visualisasi
+        elif pilihanManager == 4:
+            display(df)
+            print("Perbandingan apa yang ingin dilihat?")
+
+            visualisasi_statistik()
+            break
+
+        #UPdate maintenance
+        elif pilihanManager == 5:
+            display(df)
+            carmaintain, maintainmodel = input_vehicle()
+            if maintainmodel is None:
                 break
 
             else:
-                print("Username/Password salah. Silahkan coba lagi.")
+                newMaintenance = input("Tanggal Maintenance (YYYY-MM-DD): ")
+                newMaintenanceDate = datetime.strptime(newMaintenance, "%Y-%m-%d").date() 
+                update_sewaMobil("last_maintenance_date", newMaintenanceDate, carmaintain)
+            
+                df = read_table(connection) #REFRESH
+                break
+
+        #Logout
+        elif pilihanManager == 6:
+            logout = True
+            print("Manager sudah Logout!")
+            break
+
+def review_mobil():
+    global df
+    carRented, thecarRented = input_vehicle()
+    if thecarRented is None:
+        return
+    else:
+        #Rating
+        carRating = float(input("Berikan Rating (1-5): "))
+        newRating = (thecarRented.iloc[0]['rating'] + carRating)/2
+        update_sewaMobil("rating", newRating, carRented)
         
+        df = read_table(connection) #REFRESH
+
+        #review_count + 1
+        newReviewCount = float(thecarRented.iloc[0]['review_count']) + 1
+        update_sewaMobil("review_count", newReviewCount, carRented)
+        
+##### BACKEND FUNCTION START DISINI ######
+#WELCOME TO CAR RENTAL
+while True:
+    df = read_table(connection) #REFRESH!
+
+    print(f'''SELAMAT DATANG DI RENTAL MOBIL''')
+    menuUtama()
+    pilihan = int(input("SILAHKAN PILIH SALAH SATU MENU DIATAS: ")) #Error kalau bukan int
+    if pilihan == 1:
+        lihat_semuaMobil()
+    
+    elif pilihan == 2:
+        sewa_mobil()
+
+    elif pilihan == 3:
+        login_manager()
         logout = False
-        while True:
-            menuUtamaManager()
-            pilihanManager = int(input("SILAHKAN PILIH SALAH SATU PILIHAN DIATAS: "))
-            #Tambah Mobil Baru
-            if pilihanManager == 1:
-                vehicleNumber = len(df['vehicle_no']) + 1
-                vehicleBrand = str(input("Nama Brand Mobil: ")).capitalize()
-                vehicleModel = str(input("Nama Model Mobil: ")).capitalize()
-                vehicleType = str(input("Tipe Mobil: ")).upper()
-                vehicleYear = int(input("Mobil Keluaran tahun berapa? "))
-                fuelType = str(input("Bahan bakar yang digunakan: ")).capitalize()
-                
-                tanggalMaintenance = input("Tanggal Maintenance (YYYY-MM-DD): ")
-                lastMaintenanceDate = datetime.strptime(tanggalMaintenance, "%Y-%m-%d").date() #cek lagi
-                
-                distancetravelled = int(input("Jarak tempuh yang sudah di lewati (KM): "))
-                hargaSewa = int(input("Harga untuk disewakan: Rp. "))
-                sudahDisewakan = 0
-                yangSudahReview = 0
-                ratingnya = 0
-                status = 'Available'
-
-                add_query = "INSERT INTO carrent2026 values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-                cursor.execute(add_query, (vehicleNumber, vehicleBrand, vehicleModel, vehicleType, vehicleYear, fuelType, lastMaintenanceDate, distancetravelled, hargaSewa, sudahDisewakan, yangSudahReview, ratingnya, status))
-                connection.commit()
-                
-                df = read_table(connection) #REFRESH!
-                display(df)
-                break
         
-            elif pilihanManager == 2:
-                #Kembalikan Mobil (ubah in use jadi available)
-                display(df[df['status'] == 'In Use'])
-                changestatus = input("Mobil yang Sudah dikembalikan (Menurut vehicle_model): ")
-
-                change_query = "UPDATE carrent2026 SET status = (%s) WHERE vehicle_model = (%s)"
-                cursor.execute(change_query, ('Available', changestatus))
-                connection.commit()
-
-                #UPDATE distance travelled
-                changedistance = int(input("Berapa KM di Odometer sekarang? "))
-                updateDistance = "UPDATE carrent2026 SET distance_travelled_in_km = (%s) WHERE vehicle_model = (%s)"
-                cursor.execute(updateDistance, (changedistance, changestatus))
-                connection.commit()
-
-                df = read_table(connection) #REFRESH!
-                display(df)
-                break
-
-            #Hapus Mobil (urutan vehicle_no tidak berubah)
-            elif pilihanManager == 3:
-                display(df[df['status'] == 'Available'])
-                hapusMobil = int(input("Mobil yang ingin dihapus (Menurut vehicle_no): "))
-                
-                delete_query = "DELETE FROM carrent2026 WHERE vehicle_no = (%s)"
-                cursor.execute(delete_query, (hapusMobil,))
-                connection.commit()
-
-                df = read_table(connection) #REFRESH!
-                display(df)
-                break
-
-            #Statistiks (descriptive, mean, avg) dan visualisasi
-            elif pilihanManager == 4:
-                display(df)
-                print("Perbandingan apa yang ingin dilihat?")
-
-                #piechart vehicle_brand (descriptive)
-                vehiclebrandcount = df['vehicle_brand'].value_counts()
-                plt.figure()
-                vehiclebrandcount.plot.pie()
-                plt.title("Descriptive Brand Mobil")
-                plt.ylabel("")
-                plt.show()
-
-                #bar plot rent sales (revenue per car & per brand)
-                df['revenue_per_car'] = df['cost_per_day_in_RP'] * df['trips_taken']
-                revenue_byCar = df.groupby('vehicle_model')['revenue_per_car'].sum()
-                plt.figure()
-                revenue_byCar.plot(kind='bar')
-                plt.title("Revenue per Car")
-                plt.xlabel("Vehicle Model")
-                plt.ylabel("Revenue (Rp)")
-                plt.xticks(rotation=45)
-                plt.show()
-
-                revenue_byBrand = df.groupby('vehicle_brand')['revenue_per_car'].sum()
-                plt.figure()
-                revenue_byBrand.plot(kind='bar')
-                plt.title("Revenue per Car Brand")
-                plt.xlabel("Vehicle Brand")
-                plt.ylabel("Revenue (Rp)")
-                plt.xticks(rotation=45)
-                plt.show()
-
-                #bar plot mean rental price per brand (pricing analysis)
-                meanPriceBrand = df.groupby('vehicle_brand')['cost_per_day_in_RP'].mean()
-                plt.figure()
-                meanPriceBrand.plot(kind='bar')
-                plt.title("Average Rental Price Per Car Brand")
-                plt.xlabel("Vehicle Brand")
-                plt.ylabel("Average Price Per Day (Rp)")
-                plt.xticks(rotation=45)
-                plt.show()
-
-                #histogram distance travelled (usage analysis)
-                plt.figure()
-                plt.hist(df['distance_travelled_in_km'], df['vehicle_model'])
-                plt.title("Usage Analysis: Distance Travelled")
-                plt.xlabel("Vehicle Model") #belum vehicle model
-                plt.ylabel("Distance travelled (KM)")
-                plt.show()
-
-                #no. of trips per car (most rented vehicle)
-                trips = df.groupby("vehicle_model")['trips_taken'].sum()
-                plt.figure()
-                trips.plot(kind='bar')
-                plt.title("Most Rented Vehicle")
-                plt.xlabel("Vehicle Model")
-                plt.ylabel("Trips Taken")
-                plt.xticks(rotation=45)
-                plt.show()
-
-                #scatter distance per trip (user behaviour)
-                df['distance_per_trip'] = df['distance_travelled_in_km'] / df['trips_taken']
-                plt.figure()
-                plt.scatter(df['trips_taken'], df['distance_per_trip'])
-                plt.title("User Beahviour: Distance Per Trip")
-                plt.xlabel('Trips Taken')
-                plt.ylabel("Average Distance per Trip (KM)")
-                plt.show() #gatau artinya apa
-
-                #revenue per trip (expensive/cheap car often rented)
-                plt.figure()
-                plt.scatter(df['trips_taken'], df['cost_per_day_in_RP'])
-                plt.title('Revenue per Trip')
-                plt.xlabel("Trips Taken")
-                plt.ylabel("Cost Per Day (Rp.)")
-                plt.show() #gatau artinya apa
-
-                #histogram most favourite car according to trips and rating (preferance)
-                df['popularity_score'] = df['trips_taken'] * df['rating']
-                plt.figure()
-                plt.hist(df['popularity_score'], bins=10)
-                plt.title('Most Favourite Cars')
-                plt.xlabel('Vehicle Model') #Belum vehicle model
-                plt.ylabel('Popularity Score')
-                plt.show() #jelek banget pake histogram
-
-                break
-
-            #UPdate maintenance
-            elif pilihanManager == 5:
-                display(df)
-                carmaintain = input("Update Maintenance Mobil (vehicle_model):").capitalize()
-                maintainmodel = df[df['vehicle_model'] == carmaintain]
-                if maintainmodel.empty:
-                    print("Mobil Tidak Tersedia!")
-                    break
-
-                else:
-                    newMaintenance = input("Tanggal Maintenance (YYYY-MM-DD): ")
-                    newMaintenanceDate = datetime.strptime(newMaintenance, "%Y-%m-%d").date() 
-                    changeMaintenance = "UPDATE carrent2026 SET last_maintenance_date = (%s) WHERE vehicle_model = (%s)"
-                    cursor.execute(changeMaintenance, (newMaintenanceDate, carmaintain))
-                    connection.commit()
-
-                    df = read_table(connection) #REFRESH
-                    break
-
-            #Logout
-            elif pilihanManager == 6:
-                logout = True
-                print("Manager sudah Logout!")
-                break
+        menu_manager()
 
         #tambah buat nanya mau logout atau nga. karena waktu break jadi logout sendiri
         if logout == False:
@@ -365,26 +356,7 @@ Total Pembayaran = Rp. {total_Pembayaran}
 
     #elif 4 untuk review mobil
     elif pilihan == 4:
-        carRented = input("Mobil yang anda gunakan (vehicle_model): ").capitalize()
-        thecarRented = df[df['vehicle_model'] == carRented]
-        if thecarRented.empty:
-            print('Mobil tidak ditemukan!')
-        else:
-            #Rating
-            carRating = float(input("Berikan Rating (1-5): "))
-            newRating = (thecarRented.iloc[0]['rating'] + carRating)/2
-
-            changeRating = "UPDATE carrent2026 SET rating = (%s) WHERE vehicle_model = (%s)"
-            cursor.execute(changeRating, (newRating, carRented))
-            connection.commit()
-
-            df = read_table(connection) #REFRESH
-
-            #review_count + 1
-            newReviewCount = (thecarRented.iloc[0]['review_count']) + 1
-            changeReviewCount = "UPDATE carrent2026 SET review_count = (%s) WHERE vehicle_model = (%s)"
-            cursor.execute(changeReviewCount, (newReviewCount, carRented))
-            connection.commit()
+        review_mobil()
 
     elif pilihan == 5:
         print("Terima Kasih, Semoga Anda Datang Kembali")
