@@ -5,7 +5,7 @@
    - Nama table: carrent2026
    - Column (14): vehicle_no, vehicle_brand, vehicle_model, vehicle_type, fuel_type, last_maintenance_date, distance_travelled_in_km, cost_per_day_in_RP, trips_taken, review_count, rating, status
 
-# Download semua file di Capstone 1
+# Clone Repo Capstone1
 Install numpy, pandas, matplotlib di python
 ```commandprompt
 pip install numpy pandas matplotlib
