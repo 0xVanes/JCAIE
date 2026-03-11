@@ -7,6 +7,7 @@
 
 # Download semua file di Capstone 1
 Install numpy, pandas, matplotlib di python
-'''pip install numpy pandas matplotlib
-'''
+```commandprompt
+pip install numpy pandas matplotlib
+```
 # Run: python Capstone1RentalMobil.py
