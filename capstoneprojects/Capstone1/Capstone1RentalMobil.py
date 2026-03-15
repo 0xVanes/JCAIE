@@ -1,11 +1,12 @@
 ####### OPERATIONAL AREA #############
-from IPython.display import display #supaya bisa display table pandas di python
+from IPython.display import display #supaya bisa display table pandas di python tapi kalau di terminal masih kurang rapih ya
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-pd.set_option('display.max_columns', None) #Supaya bisa liat semua data pake pandas di max windows
+from tabulate import tabulate
+pd.set_option('display.max_columns', None) #Supaya bisa liat semua data pake pandas di max windows (kalau terminal biasa masih jelek)
 pd.set_option('display.width', 1000) #Supaya bisa data sampai ke kanan di max windows
+pd.options.display.float_format = '{:.2f}'.format
 
 import mysql.connector
 import os
@@ -63,7 +64,7 @@ class Manager:
 
 defaultManager = Manager('mrManager',12345) #Bisa diganti ke list biar bisa gampang utak atik atau dict supaya lebih cepat
 
-def get_vehicleModel(model):
+def get_vehicleModel(model): #Error kalau input kedua kali karena return langsung break
     car = df[df['vehicle_model'] == model]
     if car.empty:
         print("Mobil tidak ditemukan!")
@@ -79,19 +80,36 @@ def update_sewaMobil(column, value, model):
     execute_query(query, (value, model))
 
 def lihat_semuaMobil():
+    global df
     print("Berikut adalah Mobil-Mobil Yang Ada Di Rental Mobil")
-    display(df)
+    df = read_table(connection) #REFRESH!
+    df_display = display_tabular(df)
+    print(tabulate(df_display, headers='keys', tablefmt='psql', showindex=False))
+
+def display_tabular(df):
+    return df.rename(columns={
+        'vehicle_no': 'No',
+        'vehicle_brand': 'brand',
+        'vehicle_model': 'model',
+        'vehicle_type': 'tipe',
+        'vehicle_year': 'tahun',
+        'distance_travelled_in_km': 'KM',
+        'last_maintenance_date': 'maintenance',
+        'cost_per_day_in_RP': 'price_Rp',
+        'review_count': 'review'
+    })
 
 def sewa_mobil():
     global df
     df = read_table(connection) #REFRESH!
     print("Berikut adalah mobil yang tersedia: ")
-    display(df[df['status'] == 'Available'])
+    df_display = display_tabular(df[df['status'] == 'Available'])
+    print(tabulate(df_display, headers='keys', tablefmt='psql', showindex=False))
         
     while True:
         pilihMobil, mobilYgdipilih = input_vehicle()
 
-        if mobilYgdipilih is None: #Error kalau ga diliat dulu mobilnya ada atau tidak
+        if mobilYgdipilih is None: #Error kalau input kedua kali karena return langsung break
             continue
             
         if mobilYgdipilih.iloc[0]['status'] != 'Available':
@@ -104,7 +122,12 @@ def sewa_mobil():
             return
 
         #Lama Peminjaman
-        lamaPeminjaman = int(input(f"Berapa lama anda akan menyewa mobil {pilihMobil}? "))
+        while True:
+            try:
+                lamaPeminjaman = int(input(f"Berapa lama anda akan menyewa mobil {pilihMobil}? "))
+                break
+            except ValueError:
+                print("Input tidak valid! Masukkan angka yang benar!")
         total_Pembayaran = lamaPeminjaman * (mobilYgdipilih.iloc[0]['cost_per_day_in_RP'])
 
         #Billing
@@ -112,11 +135,22 @@ def sewa_mobil():
 Lama Peminjaman = {lamaPeminjaman}
 Total Pembayaran = Rp. {total_Pembayaran}
 ''')
-        payment = int(input("Silahkan lakukan pembayaran: Rp. "))
+        while True:
+            try:
+                payment = int(input("Silahkan lakukan pembayaran: Rp. "))
+                break
+            except ValueError:
+                print("Input tidak valid! Masukkan angka yang benar!")
+
         while payment < total_Pembayaran:
             kurang_bayar = total_Pembayaran - payment
             print(f"Pembayaran anda kurang, Rp. {kurang_bayar}")
-            payment += int(input("Lakukan pembayaran sisanya: Rp. "))
+            while True:
+                try:
+                    payment += int(input("Lakukan pembayaran sisanya: Rp. "))
+                    break
+                except ValueError:
+                    print("Input tidak valid! Masukkan angka yang benar!")
 
         if payment > total_Pembayaran:
             print(f"Kembalian anda adalah = Rp. {payment-total_Pembayaran}")
@@ -132,12 +166,14 @@ Total Pembayaran = Rp. {total_Pembayaran}
 
         changetripstaken = int(theCarModel.iloc[0]['trips_taken'] + lamaPeminjaman)
         update_sewaMobil("trips_taken", changetripstaken, pilihMobil)
+
+        df = read_table(connection) #REFRESH!
         break
 
 def login_manager():
     while True:
         namaManager = str(input("Selamat datang manager, silahkan masukan username anda: "))
-        passwordManager = int(input(f"Silahkan input password {namaManager}: ")) #Error kalau bukan int
+        passwordManager = int(input(f"Silahkan input password (ANGKA) {namaManager}: ")) #Error kalau bukan int
         if namaManager == defaultManager.name and passwordManager == defaultManager.password:
             print("Selamat datang Manager!")
             return True
@@ -146,6 +182,16 @@ def login_manager():
             print("Username/Password salah. Silahkan coba lagi.")
 
 def visualisasi_statistik():
+    #statistik
+    print("Hasil statistik rental mobil: ")
+    display(df.describe())
+    print(f"Berapa banyak mobil di rental mobil: {len(df['vehicle_no'])}")
+    print(f"Rerata harga rental mobil per hari: {(df['cost_per_day_in_RP'].mean()).round(2)}")
+    print(f"Mobil yang paling sering di rentalkan: {df['trips_taken'].max()} kali adalah {df.loc[df['trips_taken'].idxmax(), 'vehicle_model']}")
+    print(f"Rerata rating rental mobil keseluruhan: {(df['rating'].mean()).round(2)}")
+    print(f"Total revenue saat ini: Rp. {(df['cost_per_day_in_RP'] * df['trips_taken']).sum()}")
+
+    #visualisasi
     vehiclebrandcount = df['vehicle_brand'].value_counts()
     df['revenue_per_car'] = df['cost_per_day_in_RP'] * df['trips_taken']
     revenue_byCar = df.groupby('vehicle_model')['revenue_per_car'].sum()
@@ -223,7 +269,13 @@ def menu_manager():
     logout = False
     while True:
         menuUtamaManager()
-        pilihanManager = int(input("SILAHKAN PILIH SALAH SATU PILIHAN DIATAS: "))
+        while True:
+            try:
+                pilihanManager = int(input("SILAHKAN PILIH SALAH SATU PILIHAN DIATAS: "))
+                break
+            except ValueError:
+                print("Input tidak valid! Masukkan angka yang benar!")
+
         #Tambah Mobil Baru
         if pilihanManager == 1:
             print("Input Mobil Baru:")
@@ -254,7 +306,9 @@ def menu_manager():
         
         elif pilihanManager == 2:
             #Kembalikan Mobil (ubah in use jadi available)
-            display(df[df['status'] == 'In Use'])
+            df = read_table(connection)
+            df_display = display_tabular(df[df['status'] == 'In Use'])
+            print(tabulate(df_display, headers='keys', tablefmt='psql', showindex=False))
             changestatus = input("Mobil yang Sudah dikembalikan (Menurut vehicle_model): ")
             update_sewaMobil("status", "Available", changestatus)
             
@@ -263,14 +317,20 @@ def menu_manager():
             update_sewaMobil("distance_travelled_in_km", changedistance, changestatus)
             
             df = read_table(connection) #REFRESH!
-            display(df)
+            df_all = display_tabular(df)
+            print(tabulate(df_all, headers='keys', tablefmt='psql', showindex=False))
             break
 
         #Hapus Mobil (urutan vehicle_no tidak berubah)
         elif pilihanManager == 3:
             display(df[df['status'] == 'Available'])
-            hapusMobil = int(input("Mobil yang ingin dihapus (Menurut vehicle_no): "))
-                
+            while True:
+                try:
+                    hapusMobil = int(input("Mobil yang ingin dihapus (Menurut vehicle_no): "))
+                    break
+                except ValueError:
+                    print("Input tidak valid! Masukkan angka yang benar!")        
+        
             delete_query = "DELETE FROM carrent2026 WHERE vehicle_no = (%s)"
             execute_query(delete_query, (hapusMobil,))
             
@@ -281,16 +341,18 @@ def menu_manager():
         #Statistiks (descriptive, mean, avg) dan visualisasi
         elif pilihanManager == 4:
             display(df)
-            print("Perbandingan apa yang ingin dilihat?")
+            print("Statistik dan Visualisasi")
 
             visualisasi_statistik()
             break
 
         #UPdate maintenance
         elif pilihanManager == 5:
-            display(df)
+            df_display = display_tabular(df)
+            print(tabulate(df_display, headers='keys', tablefmt='psql', showindex=False))
+            
             carmaintain, maintainmodel = input_vehicle()
-            if maintainmodel is None:
+            if maintainmodel is None: #Error kalau input kedua kali karena return langsung break
                 break
 
             else:
@@ -309,20 +371,22 @@ def menu_manager():
 
 def review_mobil():
     global df
-    carRented, thecarRented = input_vehicle()
-    if thecarRented is None:
-        return
-    else:
-        #Rating
-        carRating = float(input("Berikan Rating (1-5): "))
-        newRating = (thecarRented.iloc[0]['rating'] + carRating)/2
-        update_sewaMobil("rating", newRating, carRented)
-        
-        df = read_table(connection) #REFRESH
+    while True:
+        carRented, thecarRented = input_vehicle()
+        if thecarRented is None: #Error kalau input kedua kali karena return langsung break
+            continue
+        else:
+            #Rating
+            carRating = float(input("Berikan Rating (1-5): "))
+            newRating = (thecarRented.iloc[0]['rating'] + carRating)/2
+            update_sewaMobil("rating", newRating, carRented)
+            
+            df = read_table(connection) #REFRESH
 
-        #review_count + 1
-        newReviewCount = float(thecarRented.iloc[0]['review_count']) + 1
-        update_sewaMobil("review_count", newReviewCount, carRented)
+            #review_count + 1
+            newReviewCount = float(thecarRented.iloc[0]['review_count']) + 1
+            update_sewaMobil("review_count", newReviewCount, carRented)
+            break
         
 ##### BACKEND FUNCTION START DISINI ######
 #WELCOME TO CAR RENTAL
@@ -331,7 +395,13 @@ while True:
 
     print(f'''SELAMAT DATANG DI RENTAL MOBIL''')
     menuUtama()
-    pilihan = int(input("SILAHKAN PILIH SALAH SATU MENU DIATAS: ")) #Error kalau bukan int
+    while True:
+        try:
+            pilihan = int(input("SILAHKAN PILIH SALAH SATU MENU DIATAS: ")) #Error kalau bukan int
+            break
+        except ValueError:
+            print("Input tidak valid! Masukkan angka yang benar!")
+
     if pilihan == 1:
         lihat_semuaMobil()
     
@@ -339,20 +409,19 @@ while True:
         sewa_mobil()
 
     elif pilihan == 3:
-        login_manager()
-        logout = False
-        
-        menu_manager()
+        while login_manager():
+            menu_manager()
 
-        #tambah buat nanya mau logout atau nga. karena waktu break jadi logout sendiri
-        if logout == False:
-            logoutManager = input("Ingin Logout?(ya/tidak) ").lower()
-            if logoutManager == 'ya':
-                break
-            elif logoutManager == 'tidak':
-                continue
-            else:
-                print("Tidak ada Menu tersebut!")
+            if logout == False:
+                logoutManager = input("Ingin Logout?(ya/tidak) ").lower()
+                if logoutManager == 'ya':
+                    logout == True
+                    break
+                elif logoutManager == 'tidak':
+                    continue #Harusnya kembali ke manager buka menuUtama
+                else:
+                    print("Tidak ada Menu tersebut!")
+            break
 
     #elif 4 untuk review mobil
     elif pilihan == 4:
@@ -363,4 +432,9 @@ while True:
         break
     
     else:
-        pilihan = int(input("Pilihan Tersebut tidak tersedia. Mohon Menuliskan pilihan lain: ")) #Error kalau bukan int
+        while True:
+            try:
+                pilihan = int(input("Pilihan Tersebut tidak tersedia. Mohon Menuliskan pilihan lain: ")) #Error kalau bukan int
+                break
+            except ValueError:
+                print("Input tidak valid! Masukkan angka yang benar!")
