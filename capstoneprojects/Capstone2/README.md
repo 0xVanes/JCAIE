@@ -7,17 +7,15 @@ pip install numpy pandas scikit-learn xgboost lightgbm matplotlib
 - Hallway type (category), Time to subway (ordinal), Subway station (category), facilities nearby (numerical), university nearby (numerical), public facilities (numerical), school nearby (numerical), parking lot (numerical), yar built (numerical), facilities in aparment (numerical), size (numerical), sale price (numerical - target variable)
 
 ### MODELS USED
-- Ridge Regression
 - Random Forest Regressor
 - XGBoost
-- LightGBM
+- ANN Keras
 
 ### Hyperparameter Tuning
 - GridSearchCV
 
 ### Evaluation Metrics"
 - MAE
-- MSE
 - RMSE
 - R2 Score
 - MAPE
