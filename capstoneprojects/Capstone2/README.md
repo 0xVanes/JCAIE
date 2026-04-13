@@ -33,4 +33,7 @@ python 3.11.15
 - Hasil prediksi XGBoost paling kecil (outlier) dan Pytorch paling besar (scaling)
 - Hasil paling stabil Random Forest
 
-### Demo: On Gradio (HuggingFace Space Public or Locally)
+### Demo: On Gradio (HuggingFace Space Public or Locally) di Folder Demo or https://huggingface.co/spaces/0xVanes/DaeguApartmentPrediction
+'''
+python app.py
+'''
