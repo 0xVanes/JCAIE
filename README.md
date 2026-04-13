@@ -1,8 +1,8 @@
 # PR JCAI
 
-📅 **Last Update:** [2026-03-17 - Capstone Project 1](#2026-03-17)  
-📦 **Total Completed:** Semua Exercise Module 1 + Capstone Project 1  
-🚧 **Remaining:** 1 (Capstone Project 2)
+📅 **Last Update:** [2026 -04-13 - Capstone Project 2](#2026-04-13)  
+📦 **Total Completed:** Semua Exercise Module 1 + Capstone Project 1-2  
+🚧 **Remaining:** -
 
 ## 📚 Table of Contents
 * [Yang Sudah](#Yang-Sudah)
@@ -29,11 +29,14 @@
 2026-02-27
 -  **DataAnalysisExercise** di Folder Module 1
 
-#### 2026-03-17
-- **Capstone Project 1** di Folder capstoneproject
+2026-03-17
+- **Capstone Project 1** di Folder capstoneproject/capstone1
+
+#### 2026-04-13
+- **Capstone Project 2** di Folder capstoneproject/capstone2
 
 ### 🚧 Yang Belum
-- Capstone Project 2
+- 
 
 ### Yang buat coba-coba
 Trial.ipynb
