@@ -5,7 +5,7 @@ Housing needs of modern society due to limited residential land and dense busine
 
 ### INSTALL DEPENDENCIES
 ```
-pip install numpy pandas scikit-learn xgboost torch matplotlib seaborn
+pip install numpy pandas scikit-learn xgboost torch matplotlib seaborn shap
 ```
 python 3.11.15
 ### DATASETS
@@ -14,7 +14,7 @@ python 3.11.15
 ### MODELS USED
 - Random Forest Regressor
 - XGBoost
-- ANN Pytorch
+- NN Pytorch
 
 ### Hyperparameter Tuning
 - Each hyperparameters follow a model made by others and published in medium/journal
@@ -22,16 +22,14 @@ python 3.11.15
 
 ### Evaluation Metrics
 - MAE
-- MSE
 - RMSE
 - R2 Score
 - MAPE
-- MSELoss
+- SmoothL1Loss
 
 ### RESULTS:
 - Hasil seluruh model mendekati satu sama lain
-- Hasil prediksi XGBoost paling kecil (outlier) dan Pytorch paling besar (scaling)
-- Hasil paling stabil Random Forest
+- Hasil prediksi XGBoost dan Random Forest memberikan hasil yang paling baik tetap XGBoost dipilih karena lebih cepat dari Random Forest
 
 ### Demo: On Gradio (HuggingFace Space Public or Locally) di Folder Demo or https://huggingface.co/spaces/0xVanes/DaeguApartmentPrediction
 '''
