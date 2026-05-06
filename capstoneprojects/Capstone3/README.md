@@ -1,6 +1,6 @@
 # CAPSTONE 3: IMDB AI ASSISTANT
 
--- DESCRIPTION--
+-- DESCRIPTION--</br>
 AI Chatbot to talk about movies, recommend movies and show LEGIT streaming website
 IMDB Dataset of top 1000 movies and tv shows.
 
