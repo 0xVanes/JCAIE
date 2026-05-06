@@ -196,7 +196,7 @@ def onboarding_agent(state: AgentState) -> dict:
     if age != -1 and not prefs:
         fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave their age but not their movie preferences.
                                                                             Acknowledge their age and ask what kind of movies they enjoy
-                                                                            (genres, titles, actors, directors). Keep under 40 words. 2000s gamer style.'''),
+                                                                            (genres, titles, actors, directors). Keep under 40 words. 2000s medieval style.'''),
             HumanMessage(content=human_reply),])
         fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
         return {'onboarding_done': False,
@@ -209,7 +209,7 @@ def onboarding_agent(state: AgentState) -> dict:
     if age == -1 and prefs:
         fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave movie preferences but not their age.
                                                                                 Acknowledge their preferences and ask how old they are.
-                                                                                Keep under 40 words. 2000s gamer style.'''),
+                                                                                Keep under 40 words. 2000s medieval style.'''),
             HumanMessage(content=human_reply),])
         fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
         return {'onboarding_done':  False,
@@ -220,7 +220,7 @@ def onboarding_agent(state: AgentState) -> dict:
 
     # NEITHER -> ask again
     fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user did not mention age or movie preferences.
-                                                                         again in a fun, short, 2000s gamer style. Under 30 words.'''),
+                                                                         again in a fun, short, 2000s medieval style. Under 30 words.'''),
         HumanMessage(content=human_reply),])
     fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
     return {'onboarding_done': False,
@@ -794,11 +794,10 @@ def supervisor_agent(state: AgentState) -> dict:
         val_response = llm.invoke(val_prompt, config={'callbacks': [cb]})
 
         match  = re.search(r'\{.*\}', val_response.content, re.DOTALL)
-        parsed = {'approved': False, 'issues': ['Validator LLM failed to respond correctly']}
-
-        if not parsed.get('approved', True):
-            issues.extend(parsed.get('issues', []))
-            target = 'sentiment'
+        if match:
+            parsed = json.loads(match.group())
+        else:
+            parsed = {'approved': False, 'issues': ['Validator LLM failed']}
 
     if route == 'airing':
         airing_results: list[dict] = state.get('airing_results', [])
@@ -833,8 +832,7 @@ def supervisor_agent(state: AgentState) -> dict:
     return {'validator_approved': approved,
             'validator_target': target,
             'validator_issues': issues,
-            'tool_calls': tool_calls,
-            'next_agent': 'end' if approved else target,
+            'tool_calls': tool_calls if isinstance(tool_calls, list) else [tool_calls],
             'messages': state['messages'] + [AIMessage(
                  content=f'''[Validator] {status} | issues: {str(issues if issues else 'none')}''',name='validator')],}
 

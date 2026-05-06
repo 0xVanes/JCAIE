@@ -4,13 +4,13 @@ from langchain_core.messages import HumanMessage
 from graph import run_graph, initial_state, graphy
 
 st.set_page_config(layout="wide")
-# ── LOAD CSS ────────────────────────────────────────────────────────────────
+# LOAD CSS 
 def load_css():
     with open("styles.css", "r") as f:
         css = f.read()
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# ── LANGGRAPH ─────────────────────────────────────────────────────────────────
+# LANGGRAPH
 def _init_graph():
     if st.session_state.get("graph_ready"):
         return
@@ -70,6 +70,7 @@ def _handle_input(user_input:str):
         'recommendations':         [],
         'retrieval_result':        [],
         'airing_results':          [],
+        'tool_calls':              [],
         'validator_approved':      False,
         'validator_target':        'done',
         'validator_issues':        [],
@@ -118,7 +119,7 @@ def _handle_input(user_input:str):
     if not answer and result.get("airing_results"):
         airing = result["airing_results"]
         lines  = [f"**{r['platform']}** — {r['availability']}  [link]({r['url']})" for r in airing]
-        answer = "Here's where you can watch **" + result.get("retrival_target", "") + "** in Indonesia:\n\n" + "\n\n".join(lines)
+        answer = "Here's where you can watch **" + result.get("retrieval_target", "") + "** in Indonesia:\n\n" + "\n\n".join(lines)
 
     # Priority 3: plain answer field (e.g. onboarding confirmation on first message)
     if not answer:
@@ -135,7 +136,7 @@ def render_main():
     _init_graph()
 # ---------------------------------------------------------------------------------
 
-# ── MAIN CHATBOT ─────────────────────────────────────────────────────────────────
+# MAIN CHATBOT 
     st.markdown('<div class="main-padding">', unsafe_allow_html=True)
 
     # Pixel deco strip + title
@@ -160,7 +161,7 @@ def render_main():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ── SIDEBAR PANEL ─────────────────────────────────────────────────────────────
+# SIDEBAR PANEL 
 def render_sidebar():
     def toggle_sidebar():
         st.session_state.panel_open = not st.session_state.panel_open
@@ -180,7 +181,7 @@ def render_sidebar():
             st.button("≡", on_click=toggle_sidebar, key="sb_toggle")
 
 
-# ── BOTTOM PANEL WITH BIGGER FONT ─────────────────────────────────────────────
+# BOTTOM PANEL WITH BIGGER FONT 
 def render_bottom():
     def toggle_bottom():
         st.session_state.bottom_open = not st.session_state.bottom_open
@@ -239,7 +240,7 @@ def render_bottom():
                     "route":                  agent_state.get("route",                ""),
                     "next_agent":             agent_state.get("next_agent",           ""),
                     "retrieval_mode":         agent_state.get("retrieval_mode",       ""),
-                    "retrival_target":        agent_state.get("retrival_target",      ""),
+                    "retrieval_target":        agent_state.get("retrieval_target",      ""),
                     "retrieval_attempt":      agent_state.get("retrieval_attempt",    0),
                     "recommendation_attempts":agent_state.get("recommendation_attempts", 0),
                     "airing_attempt":         agent_state.get("airing_attempt",       0),
