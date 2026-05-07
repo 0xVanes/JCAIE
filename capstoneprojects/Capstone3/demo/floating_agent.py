@@ -7,9 +7,10 @@ def render_floating_agent():
                 
         🎬 MOVIE ASSISTANT 🎬
             I recommend movies based on
-            your age & preferences, to
+            your age & preferences,
             help you find where to watch
-            them legally in Indonesia.
+            them legally in Indonesia or
+            just for a chat.
             Start typing in the chatbox!
     </div>
     ''', unsafe_allow_html=True)

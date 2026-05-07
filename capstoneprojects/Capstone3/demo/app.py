@@ -2,26 +2,26 @@ import os
 import streamlit as st
 import streamlit.components.v1 as components
 from graph import graphy, run_graph, initial_state
-from agent import (onboarding_agent, router_agent, retrieval_agent, sentiment_agent, recommendation_agent, airing_agent, supervisor_agent)
+from agent import (onboarding_agent, router_agent, retrieval_agent, sentiment_agent, recommendation_agent, airing_agent, supervisor_agent, chatterbox_agent, wait_node)
 
-from chatbox import render_main, render_sidebar, render_bottom
+from chatbox import render_main, render_bottom
 from floating_agent import render_floating_agent
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(), override=True)
 
 st.set_page_config(layout="wide")
-# LOAD CSS
+#--- LOAD CSS
 def load_css():
     with open("styles.css", "r") as f:
         css = f.read()
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# GOOGLE FONT: Press Start 2P
+#--- GOOGLE FONT: Press Start 2P
 st.markdown('<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">', unsafe_allow_html=True,)
 
 load_css()
 
-# SESSION STATE 
+#--- SESSION STATE 
 defaults = {"startenter":    False,
             "panel_open":    False,
             "bottom_open":   False,
@@ -67,14 +67,15 @@ if not st.session_state.graph_ready:
         sentiment_agent=sentiment_agent,
         recommendation_agent=recommendation_agent,
         airing_agent=airing_agent,
-        supervisor_agent=supervisor_agent,)
+        supervisor_agent=supervisor_agent,
+        chatterbox_agent=chatterbox_agent,
+        wait_node=wait_node,)
     
     if st.session_state.agent_state is None:
         st.session_state.agent_state  = initial_state(
             session_id=st.session_state.get("session_id", "new"))
     st.session_state.graph_ready = True
 
-# HELPERS 
 def rpg_bubble(role: str, content: str):
     is_user     = role == "user"
     wrap_class  = "rpg-bubble-wrap user" if is_user else "rpg-bubble-wrap assistant"
@@ -102,9 +103,6 @@ main_col, side_col = st.columns([5, 1])
 # LOAD MAIN CHATBOT 
 with main_col:
     render_main()
-
-with side_col:
-    render_sidebar()
 
 render_bottom()
 

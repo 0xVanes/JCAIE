@@ -3,6 +3,10 @@ import os
 import json
 import re
 import time
+import base64
+import pandas as pd
+import mysql.connector
+from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -18,6 +22,7 @@ load_dotenv(find_dotenv(), override=True)
 
 # LLM Libraries
 llm = ChatOpenAI(model='gpt-4o-mini', temperature = 1)
+llm_vision = ChatOpenAI(model='gpt-4o-mini', temperature = 0.5)
 
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
@@ -30,8 +35,101 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 qdrant = QdrantVectorStore.from_existing_collection(embedding=embeddings, collection_name='movies',
                                                     url=os.environ["QDRANT_URL"],
                                                     api_key=os.environ['QDRANT_API_KEY'])
+# ---Text-to-SQL ----------------------------------------------
+_sql_conn: Optional[mysql.connector.connection.MySQLConnection] = None
+ 
+def get_sql_connection():
+    global _sql_conn
+    if _sql_conn is not None:
+        try:
+            _sql_conn.ping(reconnect=True, attempts=2, delay=1)
+            return _sql_conn
+        except Exception:
+            _sql_conn = None
+    try:
+        password = os.environ.get("MYSQL_PASSWORD")
+        _sql_conn = mysql.connector.connect(
+            host='localhost',
+            user='root',
+            password=password,
+            database=os.environ.get("MYSQL_DB", "movierecom"),)
+        return _sql_conn
+    except Exception as e:
+        print(f"[SQL] Connection failed: {e}")
+        return None
+ 
+def read_table_preferences(conn) -> pd.DataFrame:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM user_preference")
+    rows, cols = cur.fetchall(), [c[0] for c in cur.description]
+    cur.close()
+    return pd.DataFrame(rows, columns=cols)
+ 
+def read_table_watch(conn) -> pd.DataFrame:
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM watch_history")
+    rows, cols = cur.fetchall(), [c[0] for c in cur.description]
+    cur.close()
+    return pd.DataFrame(rows, columns=cols)
+ 
+def _execute_query(conn, query: str, params=None):
+    cur = conn.cursor()
+    cur.execute(query, params)
+    conn.commit()
+    cur.close()
+ 
+def save_user_preference_from_state(state: 'AgentState') -> pd.DataFrame:
+    conn = get_sql_connection()
+    if conn is None:
+        print("[SQL] Skipping user_preference save — no DB connection.")
+        return pd.DataFrame()
+ 
+    user_age: int = state.get('user_age', -1)
+    genres_list: list = state.get('preferred_genres', [])
+    preferred_genres: str = ', '.join(str(g) for g in genres_list).lower()
+    rating_list: list = state.get('age_rating_filter', [])
+    age_rating: str = str(rating_list[-1]).lower() if rating_list else 'all ages'
+ 
+    df      = read_table_preferences(conn)
+    new_id  = 1 if df.empty else int(df['id'].max()) + 1
+    created = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+ 
+    _execute_query(conn,
+        'INSERT INTO user_preference VALUES (%s, %s, %s, %s, %s)',
+        (new_id, user_age, preferred_genres, age_rating, created))
+    print(f"[SQL] user_preference saved — age={user_age}, genres='{preferred_genres}', rating='{age_rating}'")
+    return read_table_preferences(conn)
+ 
+def save_watch_history_from_state(state: 'AgentState') -> pd.DataFrame:
+    conn = get_sql_connection()
+    if conn is None:
+        print("[SQL] Skipping watch_history save — no DB connection.")
+        return pd.DataFrame()
+ 
+    airing_results: list = state.get('airing_results', [])
+    if not airing_results:
+        print("[SQL] Skipping watch_history save — no airing results.")
+        return pd.DataFrame()
+ 
+    movie_title: str = str(airing_results[0].get('title', '')).strip().lower()
+    if not movie_title:
+        print("[SQL] Skipping watch_history save — title is empty.")
+        return pd.DataFrame()
+ 
+    rating_list: list = state.get('age_rating_filter', [])
+    age_rating: str = str(rating_list[-1]).lower() if rating_list else 'all ages'
+ 
+    df         = read_table_watch(conn)
+    new_id     = 1 if df.empty else int(df['id'].max()) + 1
+    watch_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+ 
+    _execute_query(conn,
+        'INSERT INTO watch_history VALUES (%s, %s, %s, %s)',
+        (new_id, movie_title, age_rating, watch_date))
+    print(f"[SQL] watch_history saved — title='{movie_title}', rating='{age_rating}'")
+    return read_table_watch(conn)
 
-# Define Schema (how recommendationdata is stored and formatted)
+# --- Define Schema (how recommendationdata is stored and formatted)----------------------------------------------
 class AgentState(TypedDict):
     onboarding_done: bool
     user_age: int
@@ -43,7 +141,7 @@ class AgentState(TypedDict):
     messages: list[BaseMessage]
     session_id: Optional[str] #conversation history
 
-    route: Literal['retrieval', 'airing']
+    route: Literal['retrieval', 'airing', 'chatterbox']
     next_agent:str
 
     retrieval_mode: Literal['exact', 'similar', 'discover']
@@ -71,6 +169,11 @@ class AgentState(TypedDict):
     validator_target: str
     validator_issues: list[str]
 
+    uploaded_file_context: str
+    conversation_ended: bool
+    chatterbox_response: str
+
+# --- LOG TOOLS & FUNCTION -------------------------------------------------------------------------------------------
 def _langfuse_cb(state):
     return CallbackHandler() #Logging LLM calls for Langfuse
 
@@ -106,7 +209,59 @@ def age_ratings(age:int) -> str:
 
     return age_group
 
-# Onboarding agent: ask age and movies that user likes
+def scan_uploaded_file(file_obj) -> str:
+    if file_obj is None:
+        return ''
+    fname = file_obj.name.lower()
+    raw   = file_obj.read()
+    b64   = base64.b64encode(raw).decode('utf-8')
+
+    if  any(fname.endswith(e) for e in ('.jpg', '.jpeg', '.png')):
+        mime = 'image/jpeg' if fname.endswith (('.jpg', '.jpeg')) else 'image/png'
+        msg = [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            {"type": "text",
+             "text": ("Identify any movie titles, posters, actors, directors, genres, "
+                      "or themes visible. Return ≤40 words as a movie search hint.")},]}]
+
+        return llm_vision.invoke(msg).content.strip()
+    
+    if fname.endswith('.pdf'):
+        try:
+            import pdfplumber, io
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages[:3])
+        except Exception:
+            text =''
+        if not text.strip():
+            return ''
+        resp = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
+                           HumanMessage(content=text[:2000]),])
+        return resp.content.strip()
+    
+    if any(fname.endswtih(e) for e in ('.docx', '.doc')):
+        try:
+            import docx as _docx, io
+            doc  = _docx.Document(io.BytesIO(raw))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception:
+            text = ''
+        if not text.strip():
+            return ''
+        resp = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
+                            HumanMessage(content=text[:2000]),])
+        return resp.content.strip()
+    return ''
+
+def _is_end(text:str) -> bool:
+        return text.strip().upper() == 'END'
+def _latest_human(state: AgentState) -> str:
+    for msg in reversed(state.get('messages', [])):
+        if isinstance(msg, HumanMessage):
+            return msg.content
+    return ''
+
+# -- Onboarding agent: ask age and movies that user likes ---------------------------------------------------------------------------------------------
 def onboarding_agent(state: AgentState) -> dict:
     '''
     Collects age and movie preferences before recommendations.
@@ -123,6 +278,12 @@ def onboarding_agent(state: AgentState) -> dict:
     next human message can complete onboarding without asking again.
     '''
     cb = _langfuse_cb(state)
+
+    # IF END
+    latest = _latest_human(state)
+    if _is_end(latest):
+        farewell = 'Fare thee well, nobel traveller. May thine watchlist be ever plentiful.'
+        return{'conversation_ended': True, 'answer': farewell, 'messages': [AIMessage(content=farewell)], 'next_agent': 'END'}
 
     # RETURNING USER
     is_returning = (state.get('user_age', -1) != -1 and bool(state.get('preferred_genres')) and state.get('onboarding_done'))
@@ -169,7 +330,7 @@ def onboarding_agent(state: AgentState) -> dict:
     new_prefs = [str(p) for p in extracted.get('preferences', [])]
 
     # Carry forward partial data from previous invokes
-    age   = new_age   if new_age   != -1 else state.get('user_age',         -1)
+    age   = new_age   if new_age   != -1 else state.get('user_age', -1)
     prefs = new_prefs if new_prefs        else state.get('preferred_genres', [])
 
     # BOTH age and prefs -> complete onboarding
@@ -182,6 +343,10 @@ def onboarding_agent(state: AgentState) -> dict:
                                {'reply': human_reply},
                                {'age': age, 'age_rating_ceiling': age_rating_ceiling,
                                 'preferences': prefs})
+        save_user_preference_from_state({**state,
+                                         'user_age': age,
+                                         'age_rating_filter': age_rating_ceiling,
+                                         'preferred_genres': prefs})
         return {'onboarding_done':   True,
                 'user_age':          age,
                 'age_rating_filter': age_rating_ceiling,
@@ -228,13 +393,25 @@ def onboarding_agent(state: AgentState) -> dict:
             'messages':        [AIMessage(content=fu.content)],
             'next_agent':      'onboarding_agent',}
 
-#Router Agent: Choose between Retrieval or Airing agent
+# --- Router Agent: Choose between Retrieval or Airing agent ----------------------------------------------------------------------------------------
 def router_agent(state: AgentState) -> dict:
     cb = _langfuse_cb(state)
     
+    # IF END
+    latest = _latest_human(state)
+    if _is_end(latest):
+        farewell = "Fare thee well, noble traveller. May thine watchlist be ever plentiful."
+        return {'conversation_ended': True, 'answer': farewell,
+                'messages': [AIMessage(content=farewell)],
+                'next_agent': 'END', 'route': 'retrieval'}
+
+
     #user context from onboarding agent
     prefs_genres = ','.join(state.get('preferred_genres', [])) or 'not specified'
-    age_filter = ','.join(state.get('age_rating_filter', [])) or 'not specified'
+    age_filter   = ','.join(state.get('age_rating_filter', [])) or 'not specified'
+
+    file_ctx     = state.get('uploaded_file_context', '')
+    file_hint    = f"\nUploaded file context: {file_ctx}" if file_ctx else ""
 
     # Always route based on the LATEST human message, not just onboarding answer
     latest_human_msg = ''
@@ -252,11 +429,15 @@ def router_agent(state: AgentState) -> dict:
                                                 From user's onboarding profile, decide which agent to invoke next:
                                                 - 'retrieval' = the user wants personalised movie recommendation
                                                 - 'airing' = the user wants to know WHERE to legally watch a *specific* title in INDONESIA
+                                                - 'chatterbox' = user wants to casually discuss movie STORIES / PLOTS / THEMES
+                                                        (not actors private lifes, not revenue, not box office)
 
                                                 Rules (apply in order):
-                                                - If the onboarding answer expresses intent to watch / stream / find it -> 'airing'
-                                                - If the user asks for suggestions, recommendations, 'I want' or 'what should I watch' -> 'retrieval'
-                                                - When genuinely ambiguous -> default to 'retrieval'AIMessage
+                                                1. Specific title + streaming / watch / where  ->  "airing"
+                                                2. Wants suggestions / "what should I watch"   ->  "retrieval"
+                                                3. File context present + asks for recs        ->  "retrieval"
+                                                4. Chatting about plot / story / themes        ->  "chatterbox"
+                                                5. Genuinely ambiguous                         ->  "chatterbox"
 
                                                 NO NEED to apply age_rating_filter but pass it to the next agent
                                                 Return ONLY valid JSON object with double quotes, no markdown, no explanation with exactly these keys:
@@ -279,18 +460,17 @@ def router_agent(state: AgentState) -> dict:
         {{'mode': 'exact'|'similar'|'discover', 'target': '<name the specific name mentioned, else empty string>, 'target_type': 'title'|'actor'|'director'|'none'}}'''
 
     # Use latest human message for intent classification; fall back to onboarding answer
-    retrieve_rule           = [SystemMessage(content=retrieve_prompt), HumanMessage(content=latest_human_msg or state.get('onboarding_answer', ''))]
-    retrieve_rule_response  = llm.invoke(retrieve_rule, config={'callbacks': [cb]})
-
+    rr_resp = llm.invoke(
+        [SystemMessage(content=retrieve_prompt),
+         HumanMessage(content=latest or state.get('onboarding_answer', ''))],
+        config={'callbacks': [cb]})
     try:
-        parse_retrieve_rule = json.loads(retrieve_rule_response.content.strip())
-        retrieval_mode      = parse_retrieve_rule.get('mode', 'discover')
-        retrieval_target    = parse_retrieve_rule.get('target', '')
-        target_type         = parse_retrieve_rule.get('target_type', '')
+        rr = json.loads(rr_resp.content.strip())
+        retrieval_mode   = rr.get('mode', 'discover')
+        retrieval_target = rr.get('target', '')
+        target_type      = rr.get('target_type', 'none')
     except json.JSONDecodeError:
-        retrieval_mode      = 'discover'
-        retrieval_target    = ''
-        target_type         = 'none'
+        retrieval_mode, retrieval_target, target_type = 'discover', '', 'none'
 
     #Log the user's reply and output (parsed data)
     update_tool_calls       = _log_tool(state, tool_name='router_llm',inputs={'messages':[m.content for m in router_message]},output=response.content,)
@@ -314,12 +494,51 @@ def router_agent(state: AgentState) -> dict:
     
     return{'route': route,
            'messages': [AIMessage(content=f'{response.content} | {reason}')],
-            'retrieval_mode': retrieval_mode,
+           'retrieval_mode': retrieval_mode,
            'retrieval_target': retrieval_target,
            'target_type': target_type,
            'tool_calls': update_tool_calls,
            'next_agent': next_agent}
 
+# --- CHATTERBOX_AGENT ------------------------------------------------------------------------------------------------------------------------------------------------
+def chatterbox_agent(state: AgentState) -> dict:
+    ''' Casual movie-story discussion.
+    Allowed: plots, themes, story arcs, world-building, endings
+    Forbidden: actors personal life, box office numbers, production gossips
+    Ends by routing to wait_node, which terminates this graph run so the next user message reenters router_agent
+    '''
+    cb = _langfuse_cb(state)
+    latest = _latest_human(state)
+    file_ctx = state.get('uploaded_file_context', '')
+    extra = f'The User shared a file related to {file_ctx}' if file_ctx else ''
+
+    prompt = [SystemMessage(content=f'''You are Movi., a bard-like movie enthusiast who speaks in a warm medieval-flavoured style.
+                                    You love discussing movie STORIES, PLOTS, THEMES, CHARACTER ARCS, WORLD-BUILDING, and ENDINGS.
+                                    Rules:
+                                    - ONLY discuss movie/series narrative content
+                                    - Never discuss actors or directors private life, salaries, relationships or gossips
+                                    - Never metion movis budgets or production money
+                                    - If user steers towards forbidden topics, gently redirect to the story
+                                    - What you talk about must be age appropriate
+                                    - Response less than 100 words
+                                    - Close with one open question to invite further discussion.'''),
+                HumanMessage(content=latest),]
+    
+    resp = llm.invoke(prompt, config={'callbacks': [cb]})
+    tc   = _log_tool(state, 'chatterbox_llm', {'input': latest}, resp.content[:200])
+ 
+    return {'chatterbox_response': resp.content,
+            'answer': resp.content,
+            'tool_calls': tc,
+            'messages': state['messages'] + [AIMessage(content=resp.content, name='chatterbox')],
+            'next_agent': 'wait_node'}
+
+# --- WAIT NODE -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def wait_node(state: AgentState) -> dict:
+    return {'next_agent': 'router_agent'}
+
+
+# --- THE THREE COMBO: RETRIEVAL, SENTIMENT, RECOMMENDATION ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #Divergence so that it does not recommend that movie only
 divergence_threshold = {0: (0,4),
                         1: (5,14),
@@ -336,7 +555,7 @@ def divergence_level(seen_count:int) -> int:
             return level
     return 2 #kalau nilainya gede bgt ex. seen_count nya minus atau 10000
 
-#Retrieval agent: retrieve data from Qdrant vector db and Duckduckgo
+# --- Retrieval agent: retrieve data from Qdrant vector db and Duckduckgo
 def retrieval_agent(state: AgentState) -> dict:
     '''
     1. Builds an optimised search query from user's profile and validator feedback
@@ -349,11 +568,9 @@ def retrieval_agent(state: AgentState) -> dict:
     attempt     = state.get('retrieval_attempt', 0) + 1
     issues      = state.get('validator_issues', [])
     prefs_genres= ', '.join(state.get('preferred_genres', [])) or 'not specified'
-    latest_human_msg = ''
-    for msg in reversed(state.get('messages', [])):
-        if isinstance(msg, HumanMessage):
-            latest_human_msg = msg.content
-            break
+    latest_human_msg = _latest_human(state)
+    file_ctx= state.get('uploaded_file_context', '')
+    file_hint = f"\nFile context hint: {file_ctx}" if file_ctx else ""
  
     issues_str = '; '.join(issues) if issues else ''
 
@@ -378,7 +595,10 @@ def retrieval_agent(state: AgentState) -> dict:
                      'Director': 'Director',}
         field = field_map.get(target_type, 'title')
 
-        qdrant_docs = qdrant.similarity_search(target, k=5, filter={'must': [{'key': field, 'match': {'value': target}}]})
+        try:
+            qdrant_docs = qdrant.similarity_search(target, k=5, filter={'must': [{'key': field, 'match': {'value': target}}]})
+        except Exception as e:
+            print(f'Qdrant similarity failed')
         
         # Retrieve from DuckDuckGo
         ddg_scope = {'title': f'"{target}" movie',
@@ -388,14 +608,18 @@ def retrieval_agent(state: AgentState) -> dict:
 
     else:
         #FILTER THROUGH SIMILARITY OR DISCOVERY
-        qdrant_docs = qdrant.similarity_search(search_query, k=5)
         qdrant_hits = []
-        for doc in qdrant_docs:
-            qdrant_hits.append({'title': doc.metadata.get('MovieName', doc.page_content[:60]),
-                                'overview': doc.page_content[:30],
-                                'rating': doc.metadata.get('age_group', ''),
-                                'source': 'qdrant',})
-    
+        try:
+            qdrant_docs = qdrant.similarity_search(search_query, k=5)
+            for doc in qdrant_docs:
+                qdrant_hits.append({'title': doc.metadata.get('MovieName', doc.page_content[:60]),
+                                    'overview': doc.page_content[:30],
+                                    'rating': doc.metadata.get('age_group', ''),
+                                    'source': 'qdrant',})
+        except Exception as e:
+            print(f'Qdrant similarity failed')
+        
+        
         # Retrieve from DuckDuckGo
         ddg_hits = []
         tool_calls = state.get('tool_calls', [])
@@ -444,6 +668,15 @@ def retrieval_agent(state: AgentState) -> dict:
             continue
         merged.append(hit)
 
+    if not merged:
+        msg = ("Mine eyes have searched far and wide but found no matching scrolls. "
+               "Prithee rephrase thy request or try a different title, actor, or genre.")
+        return {'retrieval_result': [], 'retrieval_query': search_query,
+                'retrieval_attempt': attempt, 'tool_calls': tool_calls,
+                'answer': msg,
+                'messages': state['messages'] + [AIMessage(content=msg)],
+                'next_agent': 'sentiment_agent'}
+
     new_calls = tool_calls if isinstance(tool_calls, list) else [tool_calls]
     all_tool_calls = state['tool_calls'] + [tc for tc in new_calls if tc not in state.get('tool_calls', [])]
 
@@ -456,7 +689,7 @@ def retrieval_agent(state: AgentState) -> dict:
             'next_agent': 'sentiment_agent',}
                     
 
-#Sentiment agent
+#--- Sentiment agent
 def sentiment_agent(state: AgentState) -> dict:
     '''Reads onboarding_answer + preferred_genres + seen_titles history.
     return sentiment_tone, sentiment_modifier, diversity_modifier
@@ -526,7 +759,7 @@ def sentiment_agent(state: AgentState) -> dict:
            'tool_calls': tool_calls,
            'next_agent': 'recommendation_agent'}
 
-#Recommendation agent: convert the retrieved movies to a personalized ranking list from sentimental_agent output
+#--- Recommendation agent: convert the retrieved movies to a personalized ranking list from sentimental_agent output
 def recommendation_agent(state: AgentState) -> dict:
     '''Convert retrieval_results into a ranked, personalised list.
     sentiment_modifier and diversity_modifier are appended to the system prompt via strin concatenation with no .format() used anywhere
@@ -610,7 +843,7 @@ def recommendation_agent(state: AgentState) -> dict:
                     'divergence=' + ['SAFE', 'STRETCH', 'WILD'][state.get('divergence_level', 0)] + ' | '
                     + rec_summary), name='recommendation',)],}
 
-LEGAL_PLATFORMS = {
+LEGAL_PLATFORMS = { #mostlikely will return netflix because python 3.7+ preserves insertion order
         'netflix': 'Netflix',
         'disney+': 'Disney+',
         'disney plus': 'Disney+',
@@ -630,7 +863,7 @@ LEGAL_PLATFORMS = {
         'google play': 'Google Play Movies',
         'itunes': 'iTunes',}
 
-#Airing agent:
+#--- Airing agent:
 def airing_agent(state: AgentState) -> dict:
     '''
     Searches for LEGAL streaming site of a specific movie/actor/director in INDONESIA ONLY via DuckDuckGo.
@@ -651,9 +884,9 @@ def airing_agent(state: AgentState) -> dict:
     target_type = state.get('target_type', 'title')
 
     base_query_map = {
-    "title": f"{target} streaming Indonesia legal watch online",
-    "actor": f"{target} movies streaming Indonesia legal watch online",
-    "director": f"{target} films streaming Indonesia legal watch online",}
+    "title": f"{target} streaming in Indonesia which is legal to watch online",
+    "actor": f"{target} movies streaming in Indonesia which is legal to watch online",
+    "director": f"{target} films streaming in Indonesia which is legal to watch online",}
     base_query = base_query_map.get(target_type, target + ' streaming Indonesia')
 
     if issues:
@@ -661,7 +894,7 @@ def airing_agent(state: AgentState) -> dict:
         if 'non-legal' in issue_text or 'unrecognised' in issue_text:
             base_query = target + ' Netflix OR Vidio OR "Disney+" OR "Amazon Prime" Indonesia'
         elif 'no airing results' in issue_text or 'too narrow' in issue_text:
-            base_query = target + ' where to watch Indonesia streaming'
+            base_query = target + ' where to watch in Indonesias online streaming'
 
     ddg_results = []
     time.sleep(1)
@@ -733,7 +966,7 @@ def airing_agent(state: AgentState) -> dict:
         'messages': state['messages'] + [AIMessage(content=f'[Airing] attempt {attempt} | {len(deduped)} platforms | {platform_summary}', name='airing')]}
 
 
-#Supervisor agent: validate movie list. Age appropriate content, validate answer is already according to the query
+#--- Supervisor agent: validate movie list. Age appropriate content, validate answer is already according to the query
 def supervisor_agent(state: AgentState) -> dict:
     f'''Validates output from EITHER pipeline:
  
@@ -820,9 +1053,11 @@ def supervisor_agent(state: AgentState) -> dict:
     approved = len(issues) == 0
     if approved:
         target = 'done'
+        if route == 'airing':
+            save_watch_history_from_state(state)
  
     tool_calls = _log_tool(state, 'validator',
-        {'route':     route,
+        {'route':    route,
         'attempt':   state.get('retrieval_attempts', 0),
         'rec_count': len(state.get('recommendations', [])),},
         {'approved': approved, 'issues': issues, 'target': target},)

@@ -16,7 +16,7 @@ class AgentState(TypedDict):
     tool_calls: Annotated[list, lambda x, y: y]
     messages: Annotated[list, add_messages]
     session_id: Optional[str]
-    route: Literal['retrieval', 'airing']
+    route: Literal['retrieval', 'airing', 'chatterbox']
     next_agent: str
     retrieval_mode: Literal['exact', 'similar', 'discover']
     retrieval_target: str
@@ -37,6 +37,9 @@ class AgentState(TypedDict):
     validator_approved: bool
     validator_target: str
     validator_issues: Annotated[list, lambda x, y: y]
+    uploaded_file_context: str
+    conversation_ended: bool
+    chatterbox_response: str
 
 def get_last_user_message(state: AgentState) -> str:
     messages = state.get('messages', [])
@@ -79,10 +82,20 @@ def onboard_router(state: AgentState) -> str:
     return 'end'
 
 def router_retrieve_airing(state: AgentState) -> str:
-    return 'airing_agent' if state.get('route') == 'airing' else 'retrieval_agent'
+    if state.get('conversation_ended'):
+        return 'end'
+    route = state.get('route', 'retrieval')
+    if route == 'airing':
+        return 'airing_agent'
+    if route == 'chatterbox':
+        return 'chatterbox_agent'
+    return 'retrieval_agent'
+
+def chatterbox_to_wait(state:AgentState) -> str:
+    return 'wait_node'
 
 def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent, 
-           recommendation_agent, airing_agent, supervisor_agent) -> StateGraph:
+           recommendation_agent, airing_agent, supervisor_agent, chatterbox_agent, wait_node=None) -> StateGraph:
     g = StateGraph(AgentState)
 
     g.add_node("onboarding_agent", onboarding_agent)
@@ -92,6 +105,8 @@ def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent,
     g.add_node("recommendation_agent", recommendation_agent)
     g.add_node("airing_agent", airing_agent)
     g.add_node("supervisor_agent", supervisor_agent)
+    g.add_node("chatterbox_agent", chatterbox_agent)
+    g.add_node('wait_node', wait_node)
     
     g.set_entry_point("onboarding_agent")
     
@@ -100,13 +115,17 @@ def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent,
             "end": END})
     
     g.add_conditional_edges("router_agent", router_retrieve_airing,
-        {"retrieval_agent": "retrieval_agent",
-        "airing_agent": "airing_agent"})
+                            {"retrieval_agent":  "retrieval_agent",
+                             "airing_agent":     "airing_agent",
+                             "chatterbox_agent": "chatterbox_agent",
+                             "end":              END})
     
     g.add_edge("retrieval_agent", "sentiment_agent")
     g.add_edge("sentiment_agent", "recommendation_agent")
     g.add_edge("recommendation_agent", "supervisor_agent")
     g.add_edge("airing_agent", "supervisor_agent")
+    g.add_edge("chatterbox_agent", 'wait_node')
+    g.add_edge('wait_node', END)
     
     g.add_edge("supervisor_agent", END)
     
@@ -150,4 +169,7 @@ def initial_state(session_id: str = 'new') -> AgentState:
         "airing_attempt": 0,
         "validator_approved": False,
         "validator_target": "done",
-        "validator_issues": [],}
+        "validator_issues": [],
+        'uploaded_file_context': "",
+        'conversation_ended': False,
+        'chatterbox_response': "",}

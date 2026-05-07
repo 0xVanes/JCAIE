@@ -10,13 +10,13 @@ def load_css():
         css = f.read()
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# LANGGRAPH
+#--- LANGGRAPH --------------------------------------------------------------------------------------------------------------------------------------------
 def _init_graph():
     if st.session_state.get("graph_ready"):
         return
  
     # Import all agents — move all agent functions + helpers into agents.py
-    from agent import ( onboarding_agent, router_agent, retrieval_agent, sentiment_agent, recommendation_agent, airing_agent, supervisor_agent,)
+    from agent import ( onboarding_agent, router_agent, retrieval_agent, sentiment_agent, recommendation_agent, airing_agent, supervisor_agent, chatterbox_agent, wait_node)
  
     st.session_state.movie_graph = graphy(
         onboarding_agent         = onboarding_agent,
@@ -25,7 +25,9 @@ def _init_graph():
         sentiment_agent          = sentiment_agent,
         recommendation_agent     = recommendation_agent,
         airing_agent=airing_agent,
-        supervisor_agent=supervisor_agent,)
+        supervisor_agent=supervisor_agent,
+        chatterbox_agent=chatterbox_agent,
+        wait_node=wait_node)
     st.session_state.agent_state = initial_state(session_id=st.session_state.get("session_id", "new"))
     st.session_state.graph_ready = True
 
@@ -63,7 +65,14 @@ def rpg_bubble(role: str, content: str):
 
 
 # ----------------------------------------------------------------------------------
-def _handle_input(user_input:str):
+def _handle_input(user_input:str, uploaded_file=None):
+    if user_input.strip().upper() == 'END':
+        farewell = "Fare thee well, noble traveller. May thine watchlist be ever plentiful."
+        st.session_state.messages.append({"role": "user",      "content": user_input})
+        st.session_state.messages.append({"role": "assistant", "content": farewell})
+        st.session_state.agent_state["conversation_ended"] = True
+        return
+
     # Reset all per-request fields so old results never bleed into a new query
     st.session_state.agent_state.update({
         'answer':                  '',
@@ -77,14 +86,22 @@ def _handle_input(user_input:str):
         'retrieval_attempt':       0,
         'recommendation_attempts': 0,
         'airing_attempt':          0,
-        'route':                   'retrieval',})
+        'route':                   'retrieval',
+        'chatterbox_response':     '',
+        'uploaded_file_context':   '',})
+
+    if uploaded_file is not None:
+        from agent import scan_uploaded_file
+        file_ctx = scan_uploaded_file(uploaded_file)
+        if file_ctx:
+            st.session_state.agent_state['uploaded_file_context'] = file_ctx
 
     st.session_state.agent_state["messages"].append(HumanMessage(content=user_input))
 
     # LLM LOADING MESSAGE
     loading_messages = [
         "🎬 LOADING CINEMATIC DATA...",
-        "🍿 GRABBING POPCORN...",
+        "🍿 GRABBING POPCORN FROM THE FIELD...",
         "📡 SCANNING THE MULTIVERSE...",
         "🎮 LEVELING UP RECOMMENDATIONS...",
         "🔍 CONSULTING THE MOVIE GODS...",]
@@ -119,14 +136,18 @@ def _handle_input(user_input:str):
     if not answer and result.get("airing_results"):
         airing = result["airing_results"]
         lines  = [f"**{r['platform']}** — {r['availability']}  [link]({r['url']})" for r in airing]
-        answer = "Here's where you can watch **" + result.get("retrieval_target", "") + "** in Indonesia:\n\n" + "\n\n".join(lines)
+        answer = "Whither thou shalt direct thine eyes to" + result.get("retrieval_target", "") + "in Indonesia:\n\n" + "\n\n".join(lines)
 
-    # Priority 3: plain answer field (e.g. onboarding confirmation on first message)
+    # Priority 3: chatterbox response
+    if not answer:
+        answer = result.get('chatterbox_response', '')
+
+    # Priority 4: plain answer field
     if not answer:
         answer = result.get('answer', '')
 
     if not answer:
-        answer = "Sorry, I couldn't find anything. Try rephrasing your request!"
+        answer = "Apologies, Mine eyes have scanned the parchment and found nothing. Speak thy desire in a different fashion."
     
     st.session_state.messages.append({"role": "user", "content": user_input})
     st.session_state.messages.append({"role": "assistant", "content": answer})
@@ -160,27 +181,6 @@ def render_main():
         st.rerun()
     st.markdown('</div>', unsafe_allow_html=True)
 
-
-# SIDEBAR PANEL 
-def render_sidebar():
-    def toggle_sidebar():
-        st.session_state.panel_open = not st.session_state.panel_open
-
-    if st.session_state.panel_open:
-        col_l, col_r = st.columns([1, 1])
-        with col_l:
-            st.button("≡", on_click=toggle_sidebar, key="sb_toggle")
-        with col_r:
-            st.markdown("<div style='font-size:22px;text-align:center;'>👤</div>",
-                unsafe_allow_html=True,)
-            st.button("LOGIN", key="login_btn")
-            st.button("+ CHAT", key="new_chat_btn")
-    else:
-        _, col_btn = st.columns([1, 1])
-        with col_btn:
-            st.button("≡", on_click=toggle_sidebar, key="sb_toggle")
-
-
 # BOTTOM PANEL WITH BIGGER FONT 
 def render_bottom():
     def toggle_bottom():
@@ -208,9 +208,9 @@ def render_bottom():
                 if not (
                     m["role"] == "assistant"
                     and _re.match(r'\s*\*\*\d+\.', m["content"]))]
-            last_6 = chat_msgs[-6:]
+            last_6 = chat_msgs[-6:] if len(chat_msgs) >=6 else chat_msgs
             if not last_6:
-                st.caption("No messages yet.")
+                st.caption("Silence holds the road.")
             else:
                 for m in last_6:
                     colour = "#7dd3fc" if m["role"] == "user" else "#86efac"
@@ -223,7 +223,7 @@ def render_bottom():
         with tabs[1]: 
             tool_calls = agent_state.get("tool_calls", [])
             if not tool_calls:
-                st.caption("No tool calls yet.")
+                st.caption("Silence holds the road.")
             else:
                 for tc in tool_calls[-5:]:
                     st.markdown(
@@ -234,7 +234,7 @@ def render_bottom():
             
         with tabs[2]: 
             if not agent_state:
-                st.caption("No state yet.")
+                st.caption("Silence holds the road.")
             else:
                 display_state = {
                     "route":                  agent_state.get("route",                ""),
@@ -271,6 +271,6 @@ def render_bottom():
                 st.json(airing)
     
             else:
-                st.caption("No parsed outputs yet.")
+                st.caption("Silence holds the road.")
  
     st.markdown('</div>', unsafe_allow_html=True)
