@@ -77,9 +77,6 @@ if not st.session_state.graph_ready:
             session_id=st.session_state.get("session_id", "new"))
     st.session_state.graph_ready = True
 
-def toggle_bottom():  st.session_state.bottom_open   = not st.session_state.bottom_open
-def close_tutorial(): st.session_state.show_tutorial = False
-
 # LAYOUT   
 main_col, side_col = st.columns([5, 1])
 

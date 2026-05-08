@@ -1,4 +1,3 @@
-import getpass
 import os
 import json
 import re
@@ -10,19 +9,15 @@ from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, AIMessage, HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.tools import tool
-from typing import Any, Literal, Optional
-from typing_extensions import TypedDict
-from langgraph.graph import START, END
-from langgraph.graph.message import add_messages
+from typing import Any, Optional
 from langfuse.langchain import CallbackHandler
 from ddgs import DDGS
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(), override=True)
+from graph import AgentState
 
 # LLM Libraries
 llm = ChatOpenAI(model='gpt-4o-mini', temperature = 1)
-llm_vision = ChatOpenAI(model='gpt-4o-mini', temperature = 0.5)
 
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient
@@ -35,48 +30,49 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 qdrant = QdrantVectorStore.from_existing_collection(embedding=embeddings, collection_name='movies',
                                                     url=os.environ["QDRANT_URL"],
                                                     api_key=os.environ['QDRANT_API_KEY'])
-# ---Text-to-SQL ----------------------------------------------
-_sql_conn: Optional[mysql.connector.connection.MySQLConnection] = None
+# ---Text-to-SQL --------------------------------------------------------------------------------------
+sql_conn: Optional[mysql.connector.connection.MySQLConnection] = None
  
 def get_sql_connection():
-    global _sql_conn
-    if _sql_conn is not None:
+    global sql_conn
+    if sql_conn is not None:
         try:
-            _sql_conn.ping(reconnect=True, attempts=2, delay=1)
-            return _sql_conn
+            sql_conn.ping(reconnect=True, attempts=2, delay=1)
+            return sql_conn
         except Exception:
-            _sql_conn = None
+            sql_conn = None
     try:
-        password = os.environ.get("MYSQL_PASSWORD")
-        _sql_conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password=password,
-            database=os.environ.get("MYSQL_DB", "movierecom"),)
-        return _sql_conn
+        sql_conn    = mysql.connector.connect(
+            host    ='localhost',
+            user    ='root',
+            password= os.environ.get("MYSQL_PASSWORD"),
+            database= 'movierecom',)
+        return sql_conn
     except Exception as e:
         print(f"[SQL] Connection failed: {e}")
         return None
  
 def read_table_preferences(conn) -> pd.DataFrame:
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM user_preference")
-    rows, cols = cur.fetchall(), [c[0] for c in cur.description]
-    cur.close()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM user_preference")
+    rows = cursor.fetchall()
+    cols = [c[0] for c in cursor.description]
+    cursor.close()
     return pd.DataFrame(rows, columns=cols)
  
 def read_table_watch(conn) -> pd.DataFrame:
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM watch_history")
-    rows, cols = cur.fetchall(), [c[0] for c in cur.description]
-    cur.close()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM watch_history")
+    rows = cursor.fetchall()
+    cols = [c[0] for c in cursor.description]
+    cursor.close()
     return pd.DataFrame(rows, columns=cols)
  
-def _execute_query(conn, query: str, params=None):
-    cur = conn.cursor()
-    cur.execute(query, params)
+def execute_query(conn, query: str, params=None):
+    cursor = conn.cursor()
+    cursor.execute(query, params)
     conn.commit()
-    cur.close()
+    cursor.close()
  
 def save_user_preference_from_state(state: 'AgentState') -> pd.DataFrame:
     conn = get_sql_connection()
@@ -94,8 +90,7 @@ def save_user_preference_from_state(state: 'AgentState') -> pd.DataFrame:
     new_id  = 1 if df.empty else int(df['id'].max()) + 1
     created = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
  
-    _execute_query(conn,
-        'INSERT INTO user_preference VALUES (%s, %s, %s, %s, %s)',
+    execute_query(conn, 'INSERT INTO user_preference VALUES (%s, %s, %s, %s, %s)',
         (new_id, user_age, preferred_genres, age_rating, created))
     print(f"[SQL] user_preference saved — age={user_age}, genres='{preferred_genres}', rating='{age_rating}'")
     return read_table_preferences(conn)
@@ -123,14 +118,10 @@ def save_watch_history_from_state(state: 'AgentState') -> pd.DataFrame:
     new_id     = 1 if df.empty else int(df['id'].max()) + 1
     watch_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
  
-    _execute_query(conn,
-        'INSERT INTO watch_history VALUES (%s, %s, %s, %s)',
+    execute_query(conn,'INSERT INTO watch_history VALUES (%s, %s, %s, %s)',
         (new_id, movie_title, age_rating, watch_date))
     print(f"[SQL] watch_history saved — title='{movie_title}', rating='{age_rating}'")
     return read_table_watch(conn)
-
-# --- Define Schema (how recommendationdata is stored and formatted)----------------------------------------------
-from graph import AgentState
 
 # --- LOG TOOLS & FUNCTION -------------------------------------------------------------------------------------------
 def _langfuse_cb(state):
@@ -145,9 +136,9 @@ def age_ratings(age:int) -> str:
     '''
     Map a user's age according to the most permissive content rating they could see
     Ratings follows:
-    - Adults (17+): Can see everything including Adult content and Not Rated contents
-    - Age 16: Can see everything, but NOT Adults only
-    - Age 14-15: Can see everything, but NOT 16+ or Adults only
+    - Adults (17+): Can see everything including adult content and not rated contents
+    - Age 16: Can see everything, but not adults only
+    - Age 14-15: Can see everything, but not 16+ or adults only
     - Age 8-13: Parental guidance and all ages content only
     - Age 0-7: Only All ages content
     '''
@@ -168,7 +159,7 @@ def age_ratings(age:int) -> str:
 
     return age_group
 
-def scan_uploaded_file(file_obj) -> str:
+def scan_uploaded_file(file_obj) -> str: #pdf, doc, img
     if file_obj is None:
         return ''
     fname = file_obj.name.lower()
@@ -179,11 +170,9 @@ def scan_uploaded_file(file_obj) -> str:
         mime = 'image/jpeg' if fname.endswith (('.jpg', '.jpeg')) else 'image/png'
         msg = [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-            {"type": "text",
-             "text": ("Identify any movie titles, posters, actors, directors, genres, "
-                      "or themes visible. Return ≤40 words as a movie search hint.")},]}]
-
-        return llm_vision.invoke(msg).content.strip()
+            {"type": "text", "text": (f'''Identify any movie titles, posters, actors, directors, genres,
+                            or themes visible. Return ≤40 words as a movie search hint.''')},]}]
+        return llm.invoke(msg).content.strip()
     
     if fname.endswith('.pdf'):
         try:
@@ -194,9 +183,9 @@ def scan_uploaded_file(file_obj) -> str:
             text =''
         if not text.strip():
             return ''
-        resp = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
+        respond = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
                            HumanMessage(content=text[:2000]),])
-        return resp.content.strip()
+        return respond.content.strip()
     
     if any(fname.endswtih(e) for e in ('.docx', '.doc')):
         try:
@@ -207,9 +196,9 @@ def scan_uploaded_file(file_obj) -> str:
             text = ''
         if not text.strip():
             return ''
-        resp = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
+        respond = llm.invoke([SystemMessage(content="Extract movie titles, genres, actors, directors, or themes. Return ≤40 words."),
                             HumanMessage(content=text[:2000]),])
-        return resp.content.strip()
+        return respond.content.strip()
     return ''
 
 def _is_end(text:str) -> bool:
@@ -220,19 +209,18 @@ def _latest_human(state: AgentState) -> str:
             return msg.content
     return ''
 
+farewell = 'Fare thee well, noble traveller. May thine watchlist be ever plentiful.'
 # -- Onboarding agent: ask age and movies that user likes ---------------------------------------------------------------------------------------------
 def onboarding_agent(state: AgentState) -> dict:
     '''
-    Collects age and movie preferences before recommendations.
-
+    Collects age and movie preferences
     Flow:
-    - RETURNING USER (has age + prefs + onboarding_done) -> skip to router_agent
-    - NO HUMAN MESSAGE YET -> show greeting -> END (wait)
-    - BOTH age + prefs given -> confirm -> router_agent (continue immediately)
-    - AGE ONLY -> save age, ask for prefs -> END (wait)
-    - PREFS ONLY -> save prefs, ask for age -> END (wait)
+    - Returning user (has age + prefs + onboarding_done) -> skip to router_agent
+    - No human message -> show greeting -> END (wait)
+    - Both age + prefs given -> confirm -> router_agent (continue immediately)
+    - Age only -> save age, ask for prefs -> END (wait)
+    - Pref only -> save prefs, ask for age -> END (wait)
     - NEITHER -> ask again -> END (wait)
-
     Partial data (age or prefs) is saved to state between invokes so the
     next human message can complete onboarding without asking again.
     '''
@@ -241,30 +229,21 @@ def onboarding_agent(state: AgentState) -> dict:
     # IF END
     latest = _latest_human(state)
     if _is_end(latest):
-        farewell = 'Fare thee well, noble traveller. May thine watchlist be ever plentiful.'
         return{'conversation_ended': True, 'answer': farewell, 'messages': [AIMessage(content=farewell)], 'next_agent': 'END'}
 
     # RETURNING USER
     is_returning = (state.get('user_age', -1) != -1 and bool(state.get('preferred_genres')) and state.get('onboarding_done'))
     if is_returning:
-        return {'onboarding_done': True,
-                'next_agent': 'router_agent',}
-
-    # FIND LATEST HUMAN MESSAGE
-    human_reply = ''
-    for msg in reversed(state['messages']):
-        if isinstance(msg, HumanMessage):
-            human_reply = msg.content
-            break
+        return {'onboarding_done': True, 'next_agent': 'router_agent',}
 
     # NO HUMAN MESSAGE YET -> show greeting
-    if not human_reply:
+    if not latest:
         prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''You are a movie recommendation assistant.
-                                                                        You speak like a medieval vibe, friendly assistant.
-                                                                        Ask the user their age AND what kind of movies they enjoy
+                                                                        You speak in a medieval vibe, friendly assistant.
+                                                                        Ask the user their age and what kind of movies they enjoy
                                                                         (genres, titles, actors, directors).
                                                                         Keep under 60 words. Be engaging and fun.'''),
-            HumanMessage(content='Start onboarding conversation'),])
+                HumanMessage(content='Start onboarding conversation'),])
         response = llm.invoke(prompt.format_messages(), config={'callbacks': [cb]})
         return {'onboarding_done': False,
                 'answer': response.content,
@@ -273,17 +252,17 @@ def onboarding_agent(state: AgentState) -> dict:
 
     # PARSE LATEST HUMAN MESSAGE
     extract_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''Extract structured data from the user message.
-                                                                Return ONLY valid JSON with exactly these keys:
+                                                                Return only valid JSON with exactly these keys:
                                                                 age: integer (user age, or -1 if not mentioned)
                                                                 preferences: array of strings (genres, titles, actors, directors mentioned)
                                                                 Example: "I am 22 and love action and the matrix" -> {"age": 22, "preferences": ["action", "the matrix"]}
                                                                 Example: "I am 18" -> {"age": 18, "preferences": []}
                                                                 Example: "I like action movies" -> {"age": -1, "preferences": ["action"]}'''),
-        HumanMessage(content=human_reply),])
+        HumanMessage(content=latest),])
     
     raw       = llm.invoke(extract_prompt.format_messages(), config={'callbacks': [cb]})
-    match     = re.search(r'\{.*\}', raw.content, re.DOTALL)
-    extracted = json.loads(match.group()) if match else {'age': -1, 'preferences': []}
+    match     = re.search(r'\{.*\}', raw.content, re.DOTALL) #extract the first JSON object from a string
+    extracted = json.loads(match.group()) if match else {'age': -1, 'preferences': []} #load the json's in match
 
     new_age   = int(extracted.get('age', -1))
     new_prefs = [str(p) for p in extracted.get('preferences', [])]
@@ -295,11 +274,11 @@ def onboarding_agent(state: AgentState) -> dict:
     # BOTH age and prefs -> complete onboarding
     if age != -1 and prefs:
         age_rating_ceiling = age_ratings(age)
-        confirm_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''Acknowledge the user age and preferences in under 30 words. Be enthusiastic.'''),
+        confirm_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''Acknowledge the user age and preferences and ask what do they need in under 30 words. Be enthusiastic.'''),
                         HumanMessage(content=f'User is {age} and likes {prefs}'),])
         confirm    = llm.invoke(confirm_prompt.format_messages(), config={'callbacks': [cb]})
         tool_calls = _log_tool(state, 'onboarding_extract',
-                               {'reply': human_reply},
+                               {'reply': latest},
                                {'age': age, 'age_rating_ceiling': age_rating_ceiling,
                                 'preferences': prefs})
         save_user_preference_from_state({**state,
@@ -320,8 +299,8 @@ def onboarding_agent(state: AgentState) -> dict:
     if age != -1 and not prefs:
         fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave their age but not their movie preferences.
                                                                             Acknowledge their age and ask what kind of movies they enjoy
-                                                                            (genres, titles, actors, directors). Keep under 40 words. 2000s medieval style.'''),
-            HumanMessage(content=human_reply),])
+                                                                            (genres, titles, actors, directors) in <40 words.'''),
+            HumanMessage(content=latest),])
         fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
         return {'onboarding_done': False,
                 'user_age':        age,
@@ -332,9 +311,8 @@ def onboarding_agent(state: AgentState) -> dict:
     # PREFS ONLY -> save prefs, ask for age
     if age == -1 and prefs:
         fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave movie preferences but not their age.
-                                                                                Acknowledge their preferences and ask how old they are.
-                                                                                Keep under 40 words. 2000s medieval style.'''),
-            HumanMessage(content=human_reply),])
+                                                                                Acknowledge their preferences and ask how old they are in <40 words.'''),
+            HumanMessage(content=latest),])
         fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
         return {'onboarding_done':  False,
                 'preferred_genres': prefs,
@@ -344,8 +322,8 @@ def onboarding_agent(state: AgentState) -> dict:
 
     # NEITHER -> ask again
     fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user did not mention age or movie preferences.
-                                                                         again in a fun, short, 2000s medieval style. Under 30 words.'''),
-        HumanMessage(content=human_reply),])
+                                                                         Ask again in a fun way and < 30 words.'''),
+        HumanMessage(content=latest),])
     fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
     return {'onboarding_done': False,
             'answer':          fu.content,
@@ -359,11 +337,9 @@ def router_agent(state: AgentState) -> dict:
     # IF END
     latest = _latest_human(state)
     if _is_end(latest):
-        farewell = "Fare thee well, noble traveller. May thine watchlist be ever plentiful."
         return {'conversation_ended': True, 'answer': farewell,
                 'messages': [AIMessage(content=farewell)],
                 'next_agent': 'END', 'route': 'retrieval'}
-
 
     #user context from onboarding agent
     prefs_genres = ','.join(state.get('preferred_genres', [])) or 'not specified'
@@ -372,22 +348,16 @@ def router_agent(state: AgentState) -> dict:
     file_ctx     = state.get('uploaded_file_context', '')
     file_hint    = f"\nUploaded file context: {file_ctx}" if file_ctx else ""
 
-    # Always route based on the LATEST human message, not just onboarding answer
-    latest_human_msg = ''
-    for msg in reversed(state.get('messages', [])):
-        if isinstance(msg, HumanMessage):
-            latest_human_msg = msg.content
-            break
-
     user_context = (f''' User age: {state.get('user_age', 'unknown')}
                             Allowed age ratings: {age_filter}
                             Preferred genres: {prefs_genres}
                             Onboarding answer: {state.get('onboarding_answer', '')}
-                            Latest user request: {latest_human_msg}''')
+                            Latest user request: {latest}
+                            {file_hint}''')
     router_message = [SystemMessage(content=f'''You are a routing agent for a movie recommendation system.
                                                 From user's onboarding profile, decide which agent to invoke next:
                                                 - 'retrieval' = the user wants personalised movie recommendation
-                                                - 'airing' = the user wants to know WHERE to legally watch a *specific* title in INDONESIA
+                                                - 'airing' = the user wants to know where to legally watch a specific title in INDONESIA
                                                 - 'chatterbox' = user wants to casually discuss movie STORIES / PLOTS / THEMES
                                                         (not actors private lifes, not revenue, not box office)
 
@@ -405,24 +375,22 @@ def router_agent(state: AgentState) -> dict:
     response = llm.invoke(router_message, config={'callbacks': [cb]},)
 
     #The kind to retrieve
-    retrieve_prompt = f'''Classify the user intent to ONLY one of these:
+    retrieve_prompt = f'''Classify the user intent to only one of these:
     'exact': asking about a specific movie title, actor or director by name
-        (ex.'films about or starred by Jackie Chan' -> {{"mode":"exact", "target":"Jackie Chan", "target_type":"Actors"}}
+        (ex.'films about or starred by Jackie Chan' -> {{"mode":"exact", "target":"Jackie Chan", "target_type":"actors"}}
             'the star war series movies for first timer' -> {{"mode": "exact", "target": "star war", "target_type":"MovieName"}}
             'recommend me other movies by Steven Spielberg' -> {{"mode": "exact", "target": "Steven Spielberg", "target_type": "Director"}})
     'similar': wants recommendation similar to something named
         (ex.'I liked disney movies' -> {{"mode": "similar", "target":"disney", "target_type":"MovieName"}}
-            'cartoon like zootopia' -> {{"mode": "similar", "target":"zootopia", "target_type":"MovieName"}})
+            'cartoon like zootopia' -> {{"mode": "similar", "target":"Andrew Garfield", "target_type":"actors"}})
     'discover': wants recommendation based on genres/mood ONLY, no specific references
         (ex.'I like action movies' -> {{"mode":"discover", "target":"", "target_type":"none"}})
         Return ONLY valid JSON object with double quotes, no markdown, no explanation with exactly these keys:
-        {{'mode': 'exact'|'similar'|'discover', 'target': '<name the specific name mentioned, else empty string>, 'target_type': 'title'|'actor'|'director'|'none'}}'''
+        {{"mode": "exact" OR "similar" OR "discover", "target": "<name the specific name mentioned, else empty string>", "target_type": "title" OR "actor" OR "director" OR "none"}}'''
 
     # Use latest human message for intent classification; fall back to onboarding answer
-    rr_resp = llm.invoke(
-        [SystemMessage(content=retrieve_prompt),
-         HumanMessage(content=latest or state.get('onboarding_answer', ''))],
-        config={'callbacks': [cb]})
+    rr_resp = llm.invoke([SystemMessage(content=retrieve_prompt),
+         HumanMessage(content=latest or state.get('onboarding_answer', ''))],config={'callbacks': [cb]})
     try:
         rr = json.loads(rr_resp.content.strip())
         retrieval_mode   = rr.get('mode', 'discover')
@@ -432,7 +400,7 @@ def router_agent(state: AgentState) -> dict:
         retrieval_mode, retrieval_target, target_type = 'discover', '', 'none'
 
     #Log the user's reply and output (parsed data)
-    update_tool_calls       = _log_tool(state, tool_name='router_llm',inputs={'messages':[m.content for m in router_message]},output=response.content,)
+    tool_calls       = _log_tool(state, tool_name='router_llm',inputs={'messages':[m.content for m in router_message]},output=response.content,)
     
     #Parsed data
     raw_text: str           = response.content.strip()
@@ -456,7 +424,7 @@ def router_agent(state: AgentState) -> dict:
            'retrieval_mode': retrieval_mode,
            'retrieval_target': retrieval_target,
            'target_type': target_type,
-           'tool_calls': update_tool_calls,
+           'tool_calls': tool_calls,
            'next_agent': next_agent}
 
 # --- CHATTERBOX_AGENT ------------------------------------------------------------------------------------------------------------------------------------------------
@@ -469,7 +437,7 @@ def chatterbox_agent(state: AgentState) -> dict:
     cb = _langfuse_cb(state)
     latest = _latest_human(state)
     file_ctx = state.get('uploaded_file_context', '')
-    extra = f'The User shared a file related to {file_ctx}' if file_ctx else ''
+    file_hint    = f"\nUploaded file context: {file_ctx}" if file_ctx else ""
 
     prompt = [SystemMessage(content=f'''You are Movi., a bard-like movie enthusiast who speaks in a warm medieval-flavoured style.
                                     You love discussing movie STORIES, PLOTS, THEMES, CHARACTER ARCS, WORLD-BUILDING, and ENDINGS.
@@ -481,15 +449,15 @@ def chatterbox_agent(state: AgentState) -> dict:
                                     - What you talk about must be age appropriate
                                     - Response less than 100 words
                                     - Close with one open question to invite further discussion.'''),
-                HumanMessage(content=latest),]
+                HumanMessage(content=(latest, file_hint)),]
     
-    resp = llm.invoke(prompt, config={'callbacks': [cb]})
-    tc   = _log_tool(state, 'chatterbox_llm', {'input': latest}, resp.content[:200])
+    respond = llm.invoke(prompt, config={'callbacks': [cb]})
+    tool_call   = _log_tool(state, 'chatterbox_llm', {'input': latest}, respond.content[:200])
  
-    return {'chatterbox_response': resp.content,
-            'answer': resp.content,
-            'tool_calls': tc,
-            'messages': state['messages'] + [AIMessage(content=resp.content, name='chatterbox')],
+    return {'chatterbox_response': respond.content,
+            'answer': respond.content,
+            'tool_calls': tool_call,
+            'messages': state['messages'] + [AIMessage(content=respond.content, name='chatterbox')],
             'next_agent': 'wait_node'}
 
 # --- WAIT NODE -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -538,7 +506,7 @@ def retrieval_agent(state: AgentState) -> dict:
                                    Focus on movies titles / directors / actors
                                    Do not include age or rating words.
                                    Return ONLY query string - no quotes, no explanation.'''),
-                    HumanMessage(content=f''' Latest user request (highest priority): {latest_human_msg}
+                    HumanMessage(content=f''' Latest user request (highest priority): {latest_human_msg} and {file_hint}
                                 Preferred genres / interests (background context): {prefs_genres} 
     Onboarding answer (background context): {state.get('onboarding_answer', '')} {f'previous retrieval issues to avoid: {issues_str}' if issues_str else ""}''')]
     
@@ -547,6 +515,7 @@ def retrieval_agent(state: AgentState) -> dict:
 
     if state.get('retrieval_mode') == 'exact':
         #FILTER BY METADATA
+        qdrant_hits = []
         target      = state.get('retrieval_target', '')
         target_type = state.get('target_type', 'title')
         field_map   = {'title': 'title',
@@ -556,14 +525,13 @@ def retrieval_agent(state: AgentState) -> dict:
 
         try:
             qdrant_docs = qdrant.similarity_search(target, k=5, filter={'must': [{'key': field, 'match': {'value': target}}]})
-        except Exception as e:
-            print(f'Qdrant similarity failed')
-        
-        # Retrieve from DuckDuckGo
-        ddg_scope = {'title': f'"{target}" movie',
-                     'Actors': f'"{target}" actor filmography',
-                     'Director': f'"{target}" director movies'}
-        ddg_query = f'{ddg_scope.get(target_type, target)}'
+            for doc in qdrant_docs:
+                qdrant_hits.append({'title': doc.metadata.get('MovieName', doc.page_content[:60]),
+                                    'overview': doc.page_content[:30],
+                                    'rating': doc.metadata.get('age_group', ''),
+                                    'source': 'qdrant',})
+        except Exception:
+            print(f'Qdrant exact similarity failed')
 
     else:
         #FILTER THROUGH SIMILARITY OR DISCOVERY
@@ -577,39 +545,38 @@ def retrieval_agent(state: AgentState) -> dict:
                                     'source': 'qdrant',})
         except Exception as e:
             print(f'Qdrant similarity failed')
+          
+    # Retrieve from DuckDuckGo
+    ddg_hits = []
+    tool_calls = state.get('tool_calls', [])
+    if len(qdrant_hits) <= 5:
+        ddg_query = f'best {prefs_genres}'
+
+        time.sleep(1) #Duckduckgo needs time to search
+        with DDGS() as ddgs:
+            ddg_results = []
+
+            for ddg_attempt in range(3):
+                try:
+                    with DDGS() as ddgs:
+                        ddg_results = list(ddgs.text(ddg_query, max_results=5, region="wt-wt", backend="lite"))
+                    if ddg_results:
+                        break
+                except Exception as e:
+                    print("DDG error:", e)
+
+                time.sleep(1.5)  #Duckduckgo needs time to search
+
+        for r in ddg_results:
+            ddg_hits.append({'title': r.get('title', ''),
+                            'overview': r.get('body', ''),
+                            'rating': '',
+                            'source': 'duckduckgo'})
         
-        
-        # Retrieve from DuckDuckGo
-        ddg_hits = []
-        tool_calls = state.get('tool_calls', [])
-        if len(qdrant_hits) <= 5:
-            ddg_query = f'best {prefs_genres}'
-
-            time.sleep(1) #Duckduckgo needs time to search
-            with DDGS() as ddgs:
-                ddg_results = []
-
-                for ddg_attempt in range(3):
-                    try:
-                        with DDGS() as ddgs:
-                            ddg_results = list(ddgs.text(ddg_query, max_results=5, region="wt-wt", backend="lite"))
-                        if ddg_results:
-                            break
-                    except Exception as e:
-                        print("DDG error:", e)
-
-                    time.sleep(1.5)  #Duckduckgo needs time to search
-
-            for r in ddg_results:
-                ddg_hits.append({'title': r.get('title', ''),
-                                'overview': r.get('body', ''),
-                                'rating': '',
-                                'source': 'duckduckgo'})
-            
-            tool_calls = _log_tool({'tool_calls': state.get('tool_calls', [])},
-                                'duckduckgo_search',
-                                {'query': ddg_query},
-                                f'{len(ddg_hits)} hits')
+        tool_calls = _log_tool({'tool_calls': state.get('tool_calls', [])},
+                            'duckduckgo_search',
+                            {'query': ddg_query},
+                            f'{len(ddg_hits)} hits')
     
     #Merge + deduplicate + age-filter retrieval datas
     allowed_ratings     = set(r.upper() for r in state.get('age_rating_filter', []))
@@ -626,7 +593,7 @@ def retrieval_agent(state: AgentState) -> dict:
         if hit_rating and allowed_ratings and hit_rating not in allowed_ratings:
             continue
         merged.append(hit)
-
+    
     if not merged:
         msg = ("Mine eyes have searched far and wide but found no matching scrolls. "
                "Prithee rephrase thy request or try a different title, actor, or genre.")
@@ -635,14 +602,18 @@ def retrieval_agent(state: AgentState) -> dict:
                 'answer': msg,
                 'messages': state['messages'] + [AIMessage(content=msg)],
                 'next_agent': 'sentiment_agent'}
+    
+    source_used = list(set(hit.get('source', 'unknown') for hit in merged))
+    source_info = ' + '.join(source_used).title() if source_used else 'None'
 
     new_calls = tool_calls if isinstance(tool_calls, list) else [tool_calls]
-    all_tool_calls = state['tool_calls'] + [tc for tc in new_calls if tc not in state.get('tool_calls', [])]
+    tool_calls = state['tool_calls'] + [tc for tc in new_calls if tc not in state.get('tool_calls', [])]
 
     return{'retrieval_result': merged,
             'retrieval_query': search_query,
             'retrieval_attempt': attempt,
-            'tool_calls': all_tool_calls,
+            'retrieval_source': source_info,
+            'tool_calls': tool_calls,
             'messages': state['messages'] + [AIMessage(content=f'''
                 [Retrieval] attempt {attempt}= {len(merged)} movies found via {search_query}''')],
             'next_agent': 'sentiment_agent',}
@@ -662,6 +633,7 @@ def sentiment_agent(state: AgentState) -> dict:
     issues                  = state.get('validator_issues', [])
     seen_titles: list[str]  = state.get('seen_titles', [])
     seen_count              = len(seen_titles)
+    latest                  = _latest_human(state)
 
     if seen_count <=4:
         divergence_level = 0
@@ -678,26 +650,18 @@ def sentiment_agent(state: AgentState) -> dict:
 
     diversity_modifier  = divergence_base
     issues_block        = (f'Previous recommendation issues to fix: {''.join('- ' + i for i in issues) if issues else ''}')
-    latest_human_msg    = ''
-    for msg in reversed(state.get('messages', [])):
-        if isinstance(msg, HumanMessage):
-            latest_human_msg = msg.content
-            break
 
     sentiment_prompt    = [SystemMessage(content=(f'''You are a sentiment and preference analyser for a movie recommendation system
                                                Analyse the user onboarding answer and return ONLY JSON object with double quotes, no markdown, no explanation with exactly these keys:
-                                                tone: string - one word describing emotional tone
-                                                    (ex. excited, nostalgic, adventurous, picky, annoying)
-                                                keywords: array - 3-6 salient words/phrases that reveal taste
-                                                    (ex. "plot twists", "strong female lead", "pixar")
-                                                modifier: string - one sentence preference directive for the recommendation agent
-                                                    (ex. "I like plot twists and avoid slow-burn dramas"
+                                                tone: string - one word describing emotional tone (ex. excited, nostalgic, adventurous, picky, annoying)
+                                                keywords: array - 3-6 salient words/phrases that reveal taste (ex. "plot twists", "strong female lead", "pixar")
+                                                modifier: string - one sentence preference directive for the recommendation agent (ex. "I like plot twists and avoid slow-burn dramas"
                                                 On a retry, adjust the modifier specifically to fix the listed issues.''')),
-                        HumanMessage(content=(f'''User age: ' {str(state.get('user_age'))} Current request (highest priority): {latest_human_msg}.
+                        HumanMessage(content=(f'''User age: ' {str(state.get('user_age'))} Current request (highest priority): {latest}.
                                               Preferred genres (background): {', '.join(state.get('preferred_genres', []))}
                                               Onboarding answer: {state.get('onboarding_answer', '') + issues_block}'''))]
-    response= llm.invoke(sentiment_prompt, config={'callbacks': [cb]})
-    match   = re.search(r'\{.*\}', response.content, re.DOTALL)
+    respond= llm.invoke(sentiment_prompt, config={'callbacks': [cb]})
+    match   = re.search(r'\{.*\}', respond.content, re.DOTALL)
     parsed  = json.loads(match.group()) if match else {'tone': 'casual',
                                                       'keywords': state.get('preferred_genres', [])[:6],
                                                       'modifier': f'Recommend movies matching: {', '.join(state.get('preferred_genres', []))}.'}
@@ -762,10 +726,10 @@ def recommendation_agent(state: AgentState) -> dict:
                     Retrieved movies to rank:
                     {movies_block}
                     '''
-    response     = llm.invoke([SystemMessage(content=recommendation_prompt),
+    respond      = llm.invoke([SystemMessage(content=recommendation_prompt),
                            HumanMessage(content=user_content)], config={'callbacks': [_langfuse_cb(state)]},)
     
-    match = re.search(r'\[.*\]', response.content, re.DOTALL)
+    match = re.search(r'\[.*\]', respond.content, re.DOTALL)
     try:
         recs = json.loads(match.group()) if match else []
     except json.JSONDecodeError:
@@ -797,7 +761,7 @@ def recommendation_agent(state: AgentState) -> dict:
             'recommendation_attempts': attempt,
             'seen_titles': updated_seen_titles,
             'tool_calls': tool_calls,
-            'next_agent': 'validator_agent',
+            'next_agent': 'supervisor_agent',
             'messages': state['messages'] + [AIMessage(content=('[Recommendation] attempt ' + str(attempt) + ' | '
                     'divergence=' + ['SAFE', 'STRETCH', 'WILD'][state.get('divergence_level', 0)] + ' | '
                     + rec_summary), name='recommendation',)],}
@@ -825,13 +789,12 @@ LEGAL_PLATFORMS = { #mostlikely will return netflix because python 3.7+ preserve
 #--- Airing agent:
 def airing_agent(state: AgentState) -> dict:
     '''
-    Searches for LEGAL streaming site of a specific movie/actor/director in INDONESIA ONLY via DuckDuckGo.
-    DO NOT RETURN non streaming site.
+    Searches for legal streaming site of a specific movie/actor/director in Indonesia only via DuckDuckGo.
 
     Flow:
     1. Build a targeted DDG query from retrieval target + target_type
     2. Search DDG with retry logic
-    3. Filter to known legal Indonesian streaming site ONLY
+    3. Filter to known legal Indonesian streaming site only
     4. Validate retry and validator issues to refine query
     5. Feeds to validator agent to check they are legal, age appropriate and atleast 1 movie is found
     '''
@@ -911,8 +874,7 @@ def airing_agent(state: AgentState) -> dict:
             deduped.append(r)
  
     new_calls       = tool_calls if isinstance(tool_calls, list) else [tool_calls]
-    all_tool_calls  = state.get('tool_calls', []) + [
-        tc for tc in new_calls if tc not in state.get('tool_calls', [])]
+    tool_calls  = state.get('tool_calls', []) + [tc for tc in new_calls if tc not in state.get('tool_calls', [])]
  
     platform_summary= (', '.join(r['platform'] for r in deduped)
         if deduped else 'no legal platforms found')
@@ -920,14 +882,14 @@ def airing_agent(state: AgentState) -> dict:
     return {
         'airing_results': deduped,
         'airing_attempt': attempt,
-        'tool_calls':     all_tool_calls,
+        'tool_calls':     tool_calls,
         'next_agent':     'supervisor_agent',
         'messages': state['messages'] + [AIMessage(content=f'[Airing] attempt {attempt} | {len(deduped)} platforms | {platform_summary}', name='airing')]}
 
 
 #--- Supervisor agent: validate movie list. Age appropriate content, validate answer is already according to the query
 def supervisor_agent(state: AgentState) -> dict:
-    f'''Validates output from EITHER pipeline:
+    f'''Validates output from either pipeline:
  
     Retrieval pipeline  -> validates recommendations from recommendation_agent
     Airing pipeline     -> validates platform results from airing_agent
@@ -950,7 +912,6 @@ def supervisor_agent(state: AgentState) -> dict:
     issues: list[str] = []
     target = 'done'
     recs = state.get('recommendations', [])
-
     allowed_ratings = set(r.upper() for r in state.get('age_rating_filter', []))
     
     # TOO little recommendation
@@ -971,8 +932,8 @@ def supervisor_agent(state: AgentState) -> dict:
         retrieval_target = state.get('retrieval_target', '')
         prefs            = ', '.join(state.get('preferred_genres', []))
         rec_titles       = ', '.join(r.get('title', '') for r in recs)
-        relevance_focus  = (f'The user asked specifically about: {retrieval_target}.'
-                            f'ALL recommendations must relate directly to this entity.'
+        relevance_focus  = (f'''The user asked specifically about: {retrieval_target}.
+                            ALL recommendations must relate directly to this entity.'''
                             if retrieval_mode == 'exact'
                             else f'The user prefers: {prefs}.')
 
@@ -981,11 +942,11 @@ def supervisor_agent(state: AgentState) -> dict:
                                     Return ONLY valid JSON: {{"approved": true|false, "issues": ["issue1", "issue2"]}}
                                     If approved, issues must be an empty array.
                                     Be strict about exact-mode requests - if the user asked for a specific 
-                                    title/actor/director, ALL recommendations must relate directly to that entity.'''.strip()),
+                                    title/actor/director, All recommendations must relate directly to that entity.'''.strip()),
                     HumanMessage(content=f'''{relevance_focus} Recommended titles: {rec_titles} Sentiment modifier applied: {state.get('sentiment_modifier', '')}'''.strip()),]
-        val_response = llm.invoke(val_prompt, config={'callbacks': [cb]})
+        val_respond = llm.invoke(val_prompt, config={'callbacks': [cb]})
 
-        match  = re.search(r'\{.*\}', val_response.content, re.DOTALL)
+        match  = re.search(r'\{.*\}', val_respond.content, re.DOTALL)
         if match:
             parsed = json.loads(match.group())
         else:
@@ -998,9 +959,6 @@ def supervisor_agent(state: AgentState) -> dict:
             issues.append(f'''No airing results found. DuckDuckGo search may be too narrow - retry with broader query.'''.strip())
             target = 'retrieval'
  
-        LEGAL_PLATFORMS = {'netflix', 'disney+', 'disney plus', 'vidio', 'mola',
-            'bioskop online', 'amazon prime', 'prime video', 'apple tv',
-            'hbo go', 'max', 'catchplay', 'viu', 'iflix','youtube', 'google play', 'itunes',}
         illegal = [r.get('platform', '') for r in airing_results
             if r.get('platform') and not any(p in r['platform'].lower() for p in LEGAL_PLATFORMS)]
         if illegal:
@@ -1025,31 +983,7 @@ def supervisor_agent(state: AgentState) -> dict:
  
     return {'validator_approved': approved,
             'validator_target': target,
-            'validator_issues': issues,
+            'validator_issues': parsed.get('issues', []),
             'tool_calls': tool_calls if isinstance(tool_calls, list) else [tool_calls],
             'messages': state['messages'] + [AIMessage(
                  content=f'''[Validator] {status} | issues: {str(issues if issues else 'none')}''',name='validator')],}
-
-def validator_edge(state: AgentState, ) -> Literal['retrieval_agent', 'sentiment_agent', 'end']:
-    '''
-    Approved by supervisor
-    target = retrieval + retrieval_attempts < 2 -> retrieval_agent
-    target = sentiment + recommendation_attempt < 2 -> sentiment_agent
-    '''
-    if state.get("validator_approved", False):
-        return "end"
-    route = state.get('route', 'retrieval')
-    if route == 'airing':
-        if state.get('airing_attempt', 0) < 2:
-            return 'airing_agent'
-        return 'end'
-    
-    target = state.get("validator_target", "done")
- 
-    if target == "retrieval" and state.get("retrieval_attempts", 0) < 2:
-        return "retrieval_agent"
- 
-    if target == "sentiment" and state.get("recommendation_attempts", 0) < 2:
-        return "sentiment_agent"
- 
-    return "end"

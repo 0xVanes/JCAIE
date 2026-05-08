@@ -61,41 +61,38 @@ def _handle_input(user_input:str, uploaded_file=None):
 
     with st.spinner(loading_msg):
         result = run_graph(
-            st.session_state.agent_state,
-            st.session_state.movie_graph,)
-
-        for k, v in result.items():
-            if isinstance(v, list):
-                for i, item in enumerate(v):
-                    if isinstance(item, tuple):
-                        print(f"TUPLE FOUND in result['{k}'][{i}]: {item}")
+            st.session_state.agent_state, #return schema datas
+            st.session_state.movie_graph,) #return callable objects
 
     # Update the full agent state
     st.session_state.agent_state.update(result)
 
-    # Priority 1: fresh recommendations from this run
+    # Priority 1: recommendation results
     answer = ''
     recs = result.get('recommendations', [])
     if recs:
-        lines = [
-            f"**{r['rank']}. {r['title']}** — {r.get('reason', '')}"
-            for r in recs]
-        answer = "\n\n".join(lines)
+        # '\n\n'.join gives double enter after reason
+        answer = '\n\n'.join(f'''Rank: {r['rank']}
+                                Title: {r['title']}'''.strip() for r in recs)
 
     # Priority 2: airing results
     if not answer and result.get("airing_results"):
         airing = result["airing_results"]
-        lines  = [f"**{r['platform']}** — {r['availability']}  [link]({r['url']})" for r in airing]
-        answer = "Whither thou shalt direct thine eyes to" + result.get("retrieval_target", "") + "in Indonesia:\n\n" + "\n\n".join(lines)
+        lines  = [f'''Platform: {r['platform']}
+                    Availability: {r['availability']}
+                    [Link]({r['url']})'''.strip() for r in airing]
+        answer = f'''Whither thou shalt direct thine eyes to {result.get("retrieval_target", "")} in Indonesia:
+                    {"\n\n".join(lines)}'''
 
     # Priority 3: chatterbox response
-    if not answer:
+    if not answer and not result.get('airing_results') and not result.get('recommendations'):
         answer = result.get('chatterbox_response', '')
 
-    # Priority 4: plain answer field
+    # Priority 4: plain text
     if not answer:
         answer = result.get('answer', '')
 
+    # Priority 5: fallback
     if not answer:
         answer = "Apologies, Mine eyes have scanned the parchment and found nothing. Speak thy desire in a different fashion."
     
@@ -129,10 +126,8 @@ def render_main():
 
 # BOTTOM PANEL WITH BIGGER FONT 
 def render_bottom():
-    def toggle_bottom():
-        st.session_state.bottom_open = not st.session_state.bottom_open
+    def toggle_bottom(): st.session_state.bottom_open = not st.session_state.bottom_open #Kalau false knp error ya?
 
-    st.markdown("---")
     _, tog_col = st.columns([10, 1])
     with tog_col:
         st.button("≡", on_click=toggle_bottom, key="bottom_toggle")
@@ -146,14 +141,15 @@ def render_bottom():
         st.markdown('<div class="tab-content">', unsafe_allow_html=True)
         tabs = st.tabs(["HISTORY", "TOOLS", "STATE", "PARSES"])
         with tabs[0]: 
-            import re as _re
+            import re
             display_msgs = st.session_state.get("messages", [])
+            recs = agent_state.get('recommendations', [])
+            if recs:
+                recs_text = '\n'.join(f'{r['rank']}. {r['title']}' for r in recs)
+                display_msgs.append({'role': 'assistant', 'content': recs_text})
             
-            chat_msgs = [
-                m for m in display_msgs
-                if not (
-                    m["role"] == "assistant"
-                    and _re.match(r'\s*\*\*\d+\.', m["content"]))]
+            chat_msgs = [m for m in display_msgs
+                if not (m["role"] == "assistant"and re.match(r'\s*\*\*\d+\.', m["content"]))]
             last_6 = chat_msgs[-6:] if len(chat_msgs) >=6 else chat_msgs
             if not last_6:
                 st.caption("Silence holds the road.")
@@ -186,8 +182,9 @@ def render_bottom():
                     "route":                  agent_state.get("route",                ""),
                     "next_agent":             agent_state.get("next_agent",           ""),
                     "retrieval_mode":         agent_state.get("retrieval_mode",       ""),
-                    "retrieval_target":        agent_state.get("retrieval_target",      ""),
+                    "retrieval_target":       agent_state.get("retrieval_target",      ""),
                     "retrieval_attempt":      agent_state.get("retrieval_attempt",    0),
+                    'retrieval_source':       agent_state.get('retrieval_source', None),
                     "recommendation_attempts":agent_state.get("recommendation_attempts", 0),
                     "airing_attempt":         agent_state.get("airing_attempt",       0),
                     "divergence_level":       ["SAFE","STRETCH","WILD"][

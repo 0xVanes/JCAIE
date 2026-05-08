@@ -1,7 +1,7 @@
 from typing import Annotated, Literal, Optional
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langfuse.langchain import CallbackHandler
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
@@ -24,6 +24,7 @@ class AgentState(TypedDict):
     retrieval_result: Annotated[list, lambda x, y: y]
     retrieval_attempt: int
     retrieval_query: str
+    retrieval_source: Annotated[list, lambda x,y:y]
     sentiment_tone: str
     sentiment_keywords: Annotated[list, lambda x, y: y]
     sentiment_modifier: str
@@ -51,10 +52,10 @@ def get_last_user_message(state: AgentState) -> str:
     return ""
 
 def build_query_message(state: AgentState) -> list[BaseMessage]:
-    prefs_genres = state.get('preferred_genres', [])
+    prefs_genres      = state.get('preferred_genres', [])
     onboarding_answer = state.get('onboarding_answer', '')
     last_user_message = get_last_user_message(state)
-    issues = state.get('validator_issues', [])
+    issues            = state.get('validator_issues', [])
     
     user_context = f"""Preferred genres / interests: {prefs_genres}
                     Onboarding answer: {onboarding_answer}
@@ -84,17 +85,37 @@ def onboard_router(state: AgentState) -> str:
     return 'end'
 
 def router_retrieve_airing(state: AgentState) -> str:
-    if state.get('conversation_ended'):
+    if state.get('conversation_ended') == True:
         return 'end'
-    route = state.get('route', 'retrieval')
-    if route == 'airing':
+    route = state.get('route', 'chatterbox')
+    if route == 'retrieval':
+        return 'retrieval_agent'
+    elif route == 'airing':
         return 'airing_agent'
-    if route == 'chatterbox':
+    else:
         return 'chatterbox_agent'
-    return 'retrieval_agent'
 
 def chatterbox_to_wait(state:AgentState) -> str:
     return 'wait_node'
+
+def validator_edge(state: AgentState, ) -> Literal['retrieval_agent', 'sentiment_agent', 'end']:
+    if state.get("validator_approved", False):
+        return "end"
+    route = state.get('route', 'retrieval')
+    if route == 'airing':
+        if state.get('airing_attempt', 0) < 2:
+            return 'airing_agent'
+        return 'end'
+    
+    target = state.get("validator_target", "done")
+ 
+    if target == "retrieval" and state.get("retrieval_attempts", 0) < 2:
+        return "retrieval_agent"
+ 
+    if target == "sentiment" and state.get("recommendation_attempts", 0) < 2:
+        return "sentiment_agent"
+ 
+    return "end"
 
 # -------------------------------------------------------------------------------------------------------------------------
 
@@ -112,7 +133,7 @@ def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent,
     g.add_node("chatterbox_agent", chatterbox_agent)
     g.add_node('wait_node', wait_node)
     
-    g.set_entry_point("onboarding_agent")
+    g.add_edge(START, "onboarding_agent")
     
     g.add_conditional_edges("onboarding_agent", onboard_router,
         {"router_agent": "router_agent",
@@ -131,7 +152,11 @@ def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent,
     g.add_edge("chatterbox_agent", 'wait_node')
     g.add_edge('wait_node', END)
     
-    g.add_edge("supervisor_agent", END)
+    g.add_conditional_edges("supervisor_agent", validator_edge, {
+    "retrieval_agent":  "retrieval_agent",
+    "sentiment_agent":  "sentiment_agent",
+    "airing_agent":     "airing_agent", 
+    "end":              END})
     
     return g.compile()
 
