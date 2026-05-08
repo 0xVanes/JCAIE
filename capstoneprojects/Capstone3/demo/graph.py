@@ -1,11 +1,11 @@
 from typing import Annotated, Literal, Optional
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 from langfuse.langchain import CallbackHandler
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
-# Define Schema
+#--- Define Schema
 class AgentState(TypedDict):
     onboarding_done: bool
     user_age: int
@@ -41,6 +41,8 @@ class AgentState(TypedDict):
     conversation_ended: bool
     chatterbox_response: str
 
+#--- Functions ---------------------------------------------------------------------------------------------------------------------
+
 def get_last_user_message(state: AgentState) -> str:
     messages = state.get('messages', [])
     for msg in reversed(messages):
@@ -66,7 +68,7 @@ def build_query_message(state: AgentState) -> list[BaseMessage]:
     
     return query_message
 
-# IMPORTANT: All router functions must return strings, NOT DICTIONARIES!
+#--- IMPORTANT: All router functions must return strings, NOT DICTIONARIES!
 def onboard_router(state: AgentState) -> str:
     """After onboarding, go to router or end"""
     messages = state.get('messages', [])
@@ -93,6 +95,8 @@ def router_retrieve_airing(state: AgentState) -> str:
 
 def chatterbox_to_wait(state:AgentState) -> str:
     return 'wait_node'
+
+# -------------------------------------------------------------------------------------------------------------------------
 
 def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent, 
            recommendation_agent, airing_agent, supervisor_agent, chatterbox_agent, wait_node=None) -> StateGraph:

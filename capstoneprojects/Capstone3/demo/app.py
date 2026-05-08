@@ -1,7 +1,7 @@
 import os
 import streamlit as st
 import streamlit.components.v1 as components
-from graph import graphy, run_graph, initial_state
+from graph import graphy, initial_state
 from agent import (onboarding_agent, router_agent, retrieval_agent, sentiment_agent, recommendation_agent, airing_agent, supervisor_agent, chatterbox_agent, wait_node)
 
 from chatbox import render_main, render_bottom
@@ -16,7 +16,7 @@ def load_css():
         css = f.read()
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-#--- GOOGLE FONT: Press Start 2P
+#--- FONT
 st.markdown('<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">', unsafe_allow_html=True,)
 
 load_css()
@@ -32,9 +32,10 @@ defaults = {"startenter":    False,
             "graph_ready":   False,
             "keys_entered":  False,   # Langfuse + OpenAI keys collected
 }
-for k, v in defaults.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+# Initialize value in session state
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value #bisa jg tulis st.session_state.key = 'value'
 
 # START SCREEN 
 if not st.session_state.startenter:
@@ -53,9 +54,9 @@ if not st.session_state.startenter:
     def start_app():
         st.session_state.startenter = True
     
-    _, mid, _ = st.columns([1.5, 1, 1.5])
+    _, mid, _ = st.columns([1.5, 1, 1.5]) #3 columns w/ width 1.5,1,1.5
     with mid:
-        st.button("[ ENTER ]", on_click=start_app, use_container_width=True)
+        st.button("[ ENTER ]", on_click=start_app, shortcut='ENTER', use_container_width=True)
     st.stop()
 
 # LANGGRAPH 
@@ -76,24 +77,6 @@ if not st.session_state.graph_ready:
             session_id=st.session_state.get("session_id", "new"))
     st.session_state.graph_ready = True
 
-def rpg_bubble(role: str, content: str):
-    is_user     = role == "user"
-    wrap_class  = "rpg-bubble-wrap user" if is_user else "rpg-bubble-wrap assistant"
-    bubble_class= "rpg-bubble user" if is_user else "rpg-bubble assistant"
-    portrait    = "🧑" if is_user else "🤖"
-    name        = "YOU" if is_user else "A.I."
-    name_class  = "rpg-name user" if is_user else "rpg-name assistant"
-    st.markdown(f"""
-    <div class="{wrap_class}">
-        <div class="rpg-portrait">{portrait}</div>
-        <div class="{bubble_class}">
-            <div class="{name_class}">{name}</div>
-            <div class="rpg-text">{content}</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-def toggle_sidebar(): st.session_state.panel_open    = not st.session_state.panel_open
 def toggle_bottom():  st.session_state.bottom_open   = not st.session_state.bottom_open
 def close_tutorial(): st.session_state.show_tutorial = False
 

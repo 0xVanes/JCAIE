@@ -130,48 +130,7 @@ def save_watch_history_from_state(state: 'AgentState') -> pd.DataFrame:
     return read_table_watch(conn)
 
 # --- Define Schema (how recommendationdata is stored and formatted)----------------------------------------------
-class AgentState(TypedDict):
-    onboarding_done: bool
-    user_age: int
-    age_rating_filter: list[str]
-    preferred_genres: list[str]
-    onboarding_answer: str
-    answer: str
-    tool_calls: list[dict] #identifier to track conversation across multiple interactions
-    messages: list[BaseMessage]
-    session_id: Optional[str] #conversation history
-
-    route: Literal['retrieval', 'airing', 'chatterbox']
-    next_agent:str
-
-    retrieval_mode: Literal['exact', 'similar', 'discover']
-    retrieval_target: str
-    target_type: str
-    retrieval_result: list[dict]
-    retrieval_attempt: int
-    retrieval_query: str
-
-    sentiment_tone: str
-    sentiment_keywords: list[str]
-    sentiment_modifier: str
-    diversity_modifier: str
-    divergence_level: int
-
-    seen_titles: list[str]
-
-    recommendations: list[dict]
-    recommendation_attempts: int
-
-    airing_results: list[dict]
-    airing_attempt: int
-
-    validator_approved: bool
-    validator_target: str
-    validator_issues: list[str]
-
-    uploaded_file_context: str
-    conversation_ended: bool
-    chatterbox_response: str
+from graph import AgentState
 
 # --- LOG TOOLS & FUNCTION -------------------------------------------------------------------------------------------
 def _langfuse_cb(state):
@@ -282,7 +241,7 @@ def onboarding_agent(state: AgentState) -> dict:
     # IF END
     latest = _latest_human(state)
     if _is_end(latest):
-        farewell = 'Fare thee well, nobel traveller. May thine watchlist be ever plentiful.'
+        farewell = 'Fare thee well, noble traveller. May thine watchlist be ever plentiful.'
         return{'conversation_ended': True, 'answer': farewell, 'messages': [AIMessage(content=farewell)], 'next_agent': 'END'}
 
     # RETURNING USER
