@@ -22,4 +22,4 @@ watch_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 
 /* SEE THE TABLE */
 SELECT *
-FROM user_preference;
+FROM watch_history;

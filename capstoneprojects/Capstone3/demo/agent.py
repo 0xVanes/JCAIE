@@ -143,13 +143,13 @@ def age_ratings(age:int) -> str:
     - Age 0-7: Only All ages content
     '''
     if age == -1:
-        return age_group == 'all ages'
+        return age_group == ['all ages']
     if age >= 17:
-        age_group = ['all ages', 'parental guidance', '16 years old and above','14 years old and above', '13 years old and above', 'adults only', 'not rated']
+        age_group = ['all ages', 'parental guidance', '16 years old and above','14 years old and above', '13 years old and above', 'not rated', 'adults only']
     elif age ==16:
-        age_group = ['all ages', 'parental guidance', '16 years old and above','14 years old and above', '13 years old and above']
+        age_group = ['all ages', 'parental guidance', '14 years old and above', '13 years old and above', '16 years old and above']
     elif 14<= age <=15:
-        age_group = ['all ages', 'parental guidance', '14 years old and above', '13 years old and above']
+        age_group = ['all ages', 'parental guidance', '13 years old and above', '14 years old and above']
     elif 8<= age <=13:
         age_group = ['all ages', 'parental guidance', '13 years old and above']
     elif 5< age <=8:
@@ -274,7 +274,7 @@ def onboarding_agent(state: AgentState) -> dict:
     # BOTH age and prefs -> complete onboarding
     if age != -1 and prefs:
         age_rating_ceiling = age_ratings(age)
-        confirm_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''Acknowledge the user age and preferences and ask what do they need in under 30 words. Be enthusiastic.'''),
+        confirm_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''Acknowledge the user age and preferences and ask what do they need in under 30 words. Be enthusiastic and medieval vibe.'''),
                         HumanMessage(content=f'User is {age} and likes {prefs}'),])
         confirm    = llm.invoke(confirm_prompt.format_messages(), config={'callbacks': [cb]})
         tool_calls = _log_tool(state, 'onboarding_extract',
@@ -298,6 +298,7 @@ def onboarding_agent(state: AgentState) -> dict:
     # AGE ONLY -> save age, ask for prefs
     if age != -1 and not prefs:
         fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave their age but not their movie preferences.
+                                                                            Speak in a medieval vibe.
                                                                             Acknowledge their age and ask what kind of movies they enjoy
                                                                             (genres, titles, actors, directors) in <40 words.'''),
             HumanMessage(content=latest),])
@@ -310,7 +311,7 @@ def onboarding_agent(state: AgentState) -> dict:
 
     # PREFS ONLY -> save prefs, ask for age
     if age == -1 and prefs:
-        fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave movie preferences but not their age.
+        fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user gave movie preferences but not their age. Speak in a medieval vibe.
                                                                                 Acknowledge their preferences and ask how old they are in <40 words.'''),
             HumanMessage(content=latest),])
         fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
@@ -321,7 +322,7 @@ def onboarding_agent(state: AgentState) -> dict:
                 'next_agent':       'onboarding_agent',}
 
     # NEITHER -> ask again
-    fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user did not mention age or movie preferences.
+    fu_prompt = ChatPromptTemplate.from_messages([SystemMessage(content='''The user did not mention age or movie preferences. Speak in a medieval vibe.
                                                                          Ask again in a fun way and < 30 words.'''),
         HumanMessage(content=latest),])
     fu = llm.invoke(fu_prompt.format_messages(), config={'callbacks': [cb]})
@@ -354,7 +355,7 @@ def router_agent(state: AgentState) -> dict:
                             Onboarding answer: {state.get('onboarding_answer', '')}
                             Latest user request: {latest}
                             {file_hint}''')
-    router_message = [SystemMessage(content=f'''You are a routing agent for a movie recommendation system.
+    router_message = [SystemMessage(content=f'''You are a routing agent for a movie recommendation system. Speak in a medieval vibe.
                                                 From user's onboarding profile, decide which agent to invoke next:
                                                 - 'retrieval' = the user wants personalised movie recommendation
                                                 - 'airing' = the user wants to know where to legally watch a specific title in INDONESIA
@@ -370,7 +371,7 @@ def router_agent(state: AgentState) -> dict:
 
                                                 NO NEED to apply age_rating_filter but pass it to the next agent
                                                 Return ONLY valid JSON object with double quotes, no markdown, no explanation with exactly these keys:
-                                                    {{"route": "retrieval" | "airing", "reason": "<one concise sentence>"}}'''),
+                                                    {{"route": "retrieval" | "airing" | "chatterbox"}}'''),
                         HumanMessage(content=user_context),]
     response = llm.invoke(router_message, config={'callbacks': [cb]},)
 
@@ -409,15 +410,26 @@ def router_agent(state: AgentState) -> dict:
         route: str          = parsed.get("route", "retrieval")
         reason: str         = parsed.get("reason", "")
     except json.JSONDecodeError:
-        route: str          = "airing" if "airing" in raw_text.lower() else "retrieval"
+        raw_lower = raw_text.lower()
+        if "airing" in raw_lower:
+            route = "airing"
+        elif "chatterbox" in raw_lower or "story" in raw_lower or "plot" in raw_lower:
+            route = "chatterbox"
+        else:
+            route = "retrieval"
         reason: str         = "Fallback keyword parse(JSON decode failed)"
         parsed: dict        = {"route": route, "reason": reason, "raw": raw_text}
 
-    if route not in ('retrieval', 'airing'):
-        route               = "retrieval"
-        reason              = 'Unknown route so = retrieval'
+    if route not in ('retrieval', 'airing', 'chatterbox'):
+        route               = "chatterbox"
+        reason              = 'Unknown route so = chatterbox'
 
-    next_agent              = "retrieval_agent" if route == "retrieval" else "airing_agent"
+    if route == 'retrieval':
+        next_agent = 'retrieval_agent'
+    elif route == 'airing':
+        next_agent = 'airing_agent'
+    else:
+        next_agent = 'chatterbox_agent'
     
     return{'route': route,
            'messages': [AIMessage(content=f'{response.content} | {reason}')],
@@ -438,6 +450,7 @@ def chatterbox_agent(state: AgentState) -> dict:
     latest = _latest_human(state)
     file_ctx = state.get('uploaded_file_context', '')
     file_hint    = f"\nUploaded file context: {file_ctx}" if file_ctx else ""
+    user_message = f"{latest}{file_hint}"
 
     prompt = [SystemMessage(content=f'''You are Movi., a bard-like movie enthusiast who speaks in a warm medieval-flavoured style.
                                     You love discussing movie STORIES, PLOTS, THEMES, CHARACTER ARCS, WORLD-BUILDING, and ENDINGS.
@@ -449,7 +462,7 @@ def chatterbox_agent(state: AgentState) -> dict:
                                     - What you talk about must be age appropriate
                                     - Response less than 100 words
                                     - Close with one open question to invite further discussion.'''),
-                HumanMessage(content=(latest, file_hint)),]
+                HumanMessage(content=user_message),]
     
     respond = llm.invoke(prompt, config={'callbacks': [cb]})
     tool_call   = _log_tool(state, 'chatterbox_llm', {'input': latest}, respond.content[:200])
@@ -913,6 +926,7 @@ def supervisor_agent(state: AgentState) -> dict:
     target = 'done'
     recs = state.get('recommendations', [])
     allowed_ratings = set(r.upper() for r in state.get('age_rating_filter', []))
+    parsed = {'approved': False, 'issues': []}
     
     # TOO little recommendation
     if len(recs) < 3:
@@ -967,7 +981,7 @@ def supervisor_agent(state: AgentState) -> dict:
             if target == 'done':
                 target = 'retrieval'
 
-    approved = len(issues) == 0
+    approved = len(issues) < 3
     if approved:
         target = 'done'
         if route == 'airing':
@@ -977,7 +991,7 @@ def supervisor_agent(state: AgentState) -> dict:
         {'route':    route,
         'attempt':   state.get('retrieval_attempts', 0),
         'rec_count': len(state.get('recommendations', [])),},
-        {'approved': approved, 'issues': issues, 'target': target},)
+        {'validator_approved': approved, 'issues': issues, 'target': target},)
  
     status = 'APPROVED' if approved else 'REJECTED -> retry ' + target
  

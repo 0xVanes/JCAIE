@@ -64,8 +64,11 @@ def build_query_message(state: AgentState) -> list[BaseMessage]:
     if issues:
         user_context += f"\nprevious retrieval issues to avoid: {'; '.join(issues)}"
     
-    query_message = [SystemMessage(content="You are a search query builder. Return ONLY a short search query (<12 words). Focus on movie titles, directors, or actors. No quotes, no explanation."),
-        HumanMessage(content=user_context)]
+    query_message = [{'role': 'system',
+                      'content': [{'type': 'text',
+                                   'text': 'You are a search query builder. You are a search query builder. Focus on recent user answer {user_context} and preferance{prefs_genres}. Return <12 words'}]},
+                    {'role': 'user',
+                     'content': [{'type': 'text', 'text': user_context}]}]
     
     return query_message
 
@@ -148,15 +151,14 @@ def graphy(onboarding_agent, router_agent, retrieval_agent, sentiment_agent,
     g.add_edge("retrieval_agent", "sentiment_agent")
     g.add_edge("sentiment_agent", "recommendation_agent")
     g.add_edge("recommendation_agent", "supervisor_agent")
-    g.add_edge("airing_agent", "supervisor_agent")
-    g.add_edge("chatterbox_agent", 'wait_node')
-    g.add_edge('wait_node', END)
-    
     g.add_conditional_edges("supervisor_agent", validator_edge, {
     "retrieval_agent":  "retrieval_agent",
     "sentiment_agent":  "sentiment_agent",
     "airing_agent":     "airing_agent", 
     "end":              END})
+    g.add_edge("airing_agent", "supervisor_agent")
+    g.add_edge("chatterbox_agent", 'wait_node')
+    g.add_edge('wait_node', END)
     
     return g.compile()
 
@@ -178,9 +180,9 @@ def initial_state(session_id: str = 'new') -> AgentState:
         "tool_calls": [],
         "messages": [],
         "session_id": session_id,
-        "route": "retrieval",
+        "route": "",
         "next_agent": "onboarding_agent",
-        "retrieval_mode": "discover",
+        "retrieval_mode": "",
         "retrieval_target": "",
         "target_type": "none",
         "retrieval_result": [],
